@@ -1054,3 +1054,43 @@ func Test_fetchOAuthServerMetadata_unusableDocument(t *testing.T) {
 		require.Equal(t, "http://"+addr+issuerPath, metadata.Issuer)
 	})
 }
+
+// TestMCPRouteController_deletesSupersededProtectedResourceMetadataHRF covers the upgrade path:
+// a cluster reconciled by an older controller has an HTTPRouteFilter serving the protected
+// resource metadata as a static direct response. The document is now served by the MCP proxy, so
+// the stale filter must be removed rather than left dangling behind a route rule that no longer
+// references it.
+func TestMCPRouteController_deletesSupersededProtectedResourceMetadataHRF(t *testing.T) {
+	fakeClient := requireNewFakeClientWithIndexesForMCP(t)
+	eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+	c := NewMCPRouteController(fakeClient, nil, logr.Discard(), eventCh.Ch)
+
+	mcpRoute := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+		Spec: aigv1b1.MCPRouteSpec{
+			SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+				OAuth: &aigv1b1.MCPRouteOAuth{
+					Issuer: "https://auth.example.com",
+					JWKS: &aigv1b1.JWKS{
+						RemoteJWKS: &egv1a1.RemoteJWKS{URI: "https://auth.example.com/.well-known/jwks.json"},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, fakeClient.Create(t.Context(), mcpRoute))
+
+	// Simulate what an older controller version left behind.
+	staleName := oauthProtectedResourceMetadataName(mcpRoute.Name)
+	require.NoError(t, fakeClient.Create(t.Context(), &egv1a1.HTTPRouteFilter{
+		ObjectMeta: metav1.ObjectMeta{Name: staleName, Namespace: mcpRoute.Namespace},
+	}))
+
+	require.NoError(t, c.syncMCPRouteSecurityPolicy(t.Context(), mcpRoute, "httproute-test-route"))
+
+	err := fakeClient.Get(t.Context(), client.ObjectKey{Name: staleName, Namespace: mcpRoute.Namespace}, &egv1a1.HTTPRouteFilter{})
+	require.True(t, apierrors.IsNotFound(err), "superseded HTTPRouteFilter should be deleted, got %v", err)
+
+	// Reconciling again when nothing is left behind is a no-op.
+	require.NoError(t, c.syncMCPRouteSecurityPolicy(t.Context(), mcpRoute, "httproute-test-route"))
+}

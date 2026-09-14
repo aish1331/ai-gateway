@@ -6,12 +6,12 @@
 package mcpproxy
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
 const (
@@ -59,22 +59,15 @@ func externalScheme(r *http.Request) string {
 	return "http"
 }
 
-// externalPath returns the request path as the client sent it, before any gateway-side rewrite.
+// externalPath returns the request path the client used.
+//
+// The generated HTTPRoute rules for MCP traffic and for the well-known endpoints carry no
+// URLRewrite filter, so the path Envoy forwards is the path the client sent. Deliberately not
+// consulting x-ai-eg-original-path here: nothing strips that header off inbound requests, so
+// honoring it would let a client choose which document the proxy serves and which path the
+// advertised resource identifier names.
 func externalPath(r *http.Request) string {
-	if p := r.Header.Get(internalapi.OriginalPathHeader); p != "" {
-		return stripQuery(p)
-	}
-	if p := r.Header.Get(internalapi.EnvoyOriginalPathHeader); p != "" {
-		return stripQuery(p)
-	}
 	return r.URL.Path
-}
-
-func stripQuery(path string) string {
-	if i := strings.IndexByte(path, '?'); i >= 0 {
-		return path[:i]
-	}
-	return path
 }
 
 // resourceIdentifier returns the RFC 9728 resource identifier for the MCP endpoint this request
