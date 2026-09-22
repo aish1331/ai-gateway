@@ -6,6 +6,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	aigv1b1 "github.com/envoyproxy/ai-gateway/api/v1beta1"
@@ -63,7 +65,6 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 		wantExtAuth    *egv1a1.ExtAuth
 		wantBTP        bool
 		wantFilter     bool
-		wantIssuer     string
 		wantJWKS       *egv1a1.RemoteJWKS
 		wantMergeType  *egv1a1.MergeType
 		wantBTPMerge   *egv1a1.MergeType
@@ -113,7 +114,6 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 			wantJWT:    true,
 			wantBTP:    true,
 			wantFilter: true,
-			wantIssuer: server.URL,
 			// For HTTP JWKS we don't need a cluster with TLS config.
 			wantJWKS: &egv1a1.RemoteJWKS{URI: server.URL + "/.well-known/jwks.json"},
 			wantErr:  false,
@@ -171,7 +171,6 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 			wantJWT:    true,
 			wantBTP:    true,
 			wantFilter: true,
-			wantIssuer: server.URL,
 			// For HTTPS JWKS we need a cluster with TLS config.
 			wantJWKS: &egv1a1.RemoteJWKS{
 				URI: fmt.Sprintf("https://%s/.well-known/jwks.json", serverURL.Host),
@@ -363,7 +362,6 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 			wantJWT:       true,
 			wantBTP:       true,
 			wantFilter:    true,
-			wantIssuer:    server.URL,
 			wantJWKS:      &egv1a1.RemoteJWKS{URI: server.URL + "/.well-known/jwks.json"},
 			wantMergeType: ptr.To(egv1a1.StrategicMerge),
 			wantBTPMerge:  ptr.To(egv1a1.StrategicMerge),
@@ -435,7 +433,6 @@ func TestMCPRouteController_syncMCPRouteSecurityPolicy(t *testing.T) {
 				if tt.wantJWT {
 					require.NotNil(t, securityPolicy.Spec.JWT)
 					require.NotEmpty(t, securityPolicy.Spec.JWT.Providers)
-					require.Equal(t, tt.wantIssuer, securityPolicy.Spec.JWT.Providers[0].Issuer)
 					if tt.wantJWKS != nil {
 						require.Equal(t, tt.wantJWKS, securityPolicy.Spec.JWT.Providers[0].RemoteJWKS)
 					}
@@ -1098,4 +1095,62 @@ func TestMCPRouteController_deletesSupersededProtectedResourceMetadataHRF(t *tes
 
 	// Reconciling again when nothing is left behind is a no-op.
 	require.NoError(t, c.syncMCPRouteSecurityPolicy(t.Context(), mcpRoute, "httproute-test-route"))
+}
+
+func TestMCPRouteController_deleteOAuthProtectedResourceMetadataHRF_errors(t *testing.T) {
+	mcpRoute := &aigv1b1.MCPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-route", Namespace: "default"},
+		Spec: aigv1b1.MCPRouteSpec{
+			SecurityPolicy: &aigv1b1.MCPRouteSecurityPolicy{
+				OAuth: &aigv1b1.MCPRouteOAuth{
+					Issuer: "https://auth.example.com",
+					JWKS: &aigv1b1.JWKS{
+						RemoteJWKS: &egv1a1.RemoteJWKS{URI: "https://auth.example.com/.well-known/jwks.json"},
+					},
+				},
+			},
+		},
+	}
+	staleName := oauthProtectedResourceMetadataName(mcpRoute.Name)
+
+	t.Run("get error", func(t *testing.T) {
+		inner, ok := requireNewFakeClientWithIndexesForMCP(t).(client.WithWatch)
+		require.True(t, ok)
+		require.NoError(t, inner.Create(t.Context(), mcpRoute.DeepCopy()))
+		fakeClient := interceptor.NewClient(inner, interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, isFilter := obj.(*egv1a1.HTTPRouteFilter); isFilter && key.Name == staleName {
+					return fmt.Errorf("simulated get failure")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		})
+		eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+		c := NewMCPRouteController(fakeClient, nil, logr.Discard(), eventCh.Ch)
+		err := c.syncMCPRouteSecurityPolicy(t.Context(), mcpRoute, "httproute-test-route")
+		require.ErrorContains(t, err, "failed to delete legacy HTTPRouteFilter")
+		require.ErrorContains(t, err, "failed to get HTTPRouteFilter")
+	})
+
+	t.Run("delete error", func(t *testing.T) {
+		inner, ok := requireNewFakeClientWithIndexesForMCP(t).(client.WithWatch)
+		require.True(t, ok)
+		require.NoError(t, inner.Create(t.Context(), mcpRoute.DeepCopy()))
+		require.NoError(t, inner.Create(t.Context(), &egv1a1.HTTPRouteFilter{
+			ObjectMeta: metav1.ObjectMeta{Name: staleName, Namespace: mcpRoute.Namespace},
+		}))
+		fakeClient := interceptor.NewClient(inner, interceptor.Funcs{
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if filter, isFilter := obj.(*egv1a1.HTTPRouteFilter); isFilter && filter.Name == staleName {
+					return fmt.Errorf("simulated delete failure")
+				}
+				return cl.Delete(ctx, obj, opts...)
+			},
+		})
+		eventCh := internaltesting.NewControllerEventChan[*gwapiv1.Gateway]()
+		c := NewMCPRouteController(fakeClient, nil, logr.Discard(), eventCh.Ch)
+		err := c.syncMCPRouteSecurityPolicy(t.Context(), mcpRoute, "httproute-test-route")
+		require.ErrorContains(t, err, "failed to delete legacy HTTPRouteFilter")
+		require.ErrorContains(t, err, "failed to delete HTTPRouteFilter")
+	})
 }

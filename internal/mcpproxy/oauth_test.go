@@ -6,6 +6,8 @@
 package mcpproxy
 
 import (
+	"crypto/tls"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -43,20 +45,27 @@ func TestExternalScheme(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		header string
+		tls    bool
 		want   string
 	}{
-		{"forwarded https", "https", "https"},
-		{"forwarded http", "http", "http"},
+		{"forwarded https", "https", false, "https"},
+		{"forwarded http", "http", false, "http"},
 		// Chained proxies append to the list; the first entry is closest to the client.
-		{"chained proxies", "https, http", "https"},
-		{"padded value", "  https  ", "https"},
+		{"chained proxies", "https, http", false, "https"},
+		{"padded value", "  https  ", false, "https"},
 		// Envoy always sets the header, so the fallback only matters for direct requests.
-		{"absent", "", "http"},
+		{"absent", "", false, "http"},
+		{"tls without forwarded proto", "", true, "https"},
+		// A forwarded proto of only whitespace/empty hops is treated as absent.
+		{"empty first hop falls through to tls", ",", true, "https"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "http://example.com/mcp", nil)
 			if tc.header != "" {
 				r.Header.Set("x-forwarded-proto", tc.header)
+			}
+			if tc.tls {
+				r.TLS = &tls.ConnectionState{}
 			}
 			require.Equal(t, tc.want, externalScheme(r))
 		})
@@ -368,4 +377,22 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 		h.ServeHTTP(w, r)
 		require.Equal(t, http.StatusMethodNotAllowed, w.Code)
 	})
+}
+
+type errResponseWriter struct {
+	http.ResponseWriter
+	err error
+}
+
+func (e errResponseWriter) Write([]byte) (int, error) { return 0, e.err }
+
+func TestWriteProtectedResourceMetadata_WriteError(t *testing.T) {
+	proxy := newTestMCPProxy()
+	r := httptest.NewRequest(http.MethodGet, "http://api.example.com/.well-known/oauth-protected-resource/mcp", nil)
+	r.Header.Set("x-forwarded-proto", "https")
+	rec := httptest.NewRecorder()
+	// A failed write is logged and otherwise ignored; the handler must not panic.
+	proxy.writeProtectedResourceMetadata(errResponseWriter{ResponseWriter: rec, err: io.ErrClosedPipe}, r,
+		&filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+	require.Equal(t, http.StatusOK, rec.Code)
 }
