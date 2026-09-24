@@ -78,17 +78,29 @@ func externalPath(r *http.Request) string {
 // externally visible URL without forwarding headers can still pin the value.
 func resourceIdentifier(r *http.Request, oauth *filterapi.MCPRouteOAuth, resourcePath string) string {
 	if oauth != nil && oauth.Resource != "" {
-		return strings.TrimSuffix(oauth.Resource, "/")
+		// Emitted exactly as configured, including any trailing slash. The static direct
+		// response this replaced did the same, so a route that pins resource sees a
+		// byte-identical document before and after this change.
+		return oauth.Resource
 	}
 	identifier := externalScheme(r) + "://" + r.Host + resourcePath
 	return strings.TrimSuffix(identifier, "/")
+}
+
+// derivesFromRequest reports whether the advertised identifier depends on this request rather
+// than on configuration. It decides whether the response needs a Vary header.
+func derivesFromRequest(oauth *filterapi.MCPRouteOAuth) bool {
+	return oauth == nil || oauth.Resource == ""
 }
 
 // resourceMetadataURL returns the URL of the Protected Resource Metadata document for the MCP
 // endpoint this request was made against, per RFC 9728 section 3.1: the well-known path is
 // inserted between the identifier's authority and its path component.
 func resourceMetadataURL(r *http.Request, oauth *filterapi.MCPRouteOAuth, resourcePath string) string {
-	identifier := resourceIdentifier(r, oauth, resourcePath)
+	// buildResourceMetadataURL has always trimmed a trailing slash before splicing in the
+	// well-known path, so the challenge URL keeps that normalization even though the document
+	// reproduces the configured value verbatim.
+	identifier := strings.TrimSuffix(resourceIdentifier(r, oauth, resourcePath), "/")
 
 	prefixLen := 0
 	switch {
@@ -114,13 +126,9 @@ func resourceMetadataURL(r *http.Request, oauth *filterapi.MCPRouteOAuth, resour
 // Metadata document. The MCPRoute is identified by the header Envoy sets on the dedicated
 // route rule, the same way MCP traffic is routed.
 func (m *mcpRequestContext) serveOAuthProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet, http.MethodOptions:
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+	// No method gate. The rule this replaced was an HTTPRouteFilter direct response matching
+	// on path alone, so Envoy answered every method with the document. Rejecting anything here
+	// would be a change in client-visible behaviour.
 	routeName := r.Header.Get(internalapi.MCPRouteHeader)
 	var oauth *filterapi.MCPRouteOAuth
 	if m.mcpProxyConfig != nil {
@@ -137,19 +145,16 @@ func (m *mcpRequestContext) serveOAuthProtectedResourceMetadata(w http.ResponseW
 		return
 	}
 
-	if r.Method == http.MethodOptions {
-		writeProtectedResourceMetadataCORSHeaders(w.Header())
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	m.writeProtectedResourceMetadata(w, r, oauth)
 }
 
+// writeProtectedResourceMetadataCORSHeaders reproduces exactly the headers ensureCORSHeaders
+// put on the HTTPRouteFilter direct response. Browser-based MCP clients fetch this document
+// cross-origin, and mcp-protocol-version is the request header they send with it.
 func writeProtectedResourceMetadataCORSHeaders(h http.Header) {
-	// The document is fetched by browser-based MCP clients from a different origin.
 	h.Set("Access-Control-Allow-Origin", "*")
-	h.Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	h.Set("Access-Control-Allow-Headers", "content-type")
+	h.Set("Access-Control-Allow-Methods", "GET")
+	h.Set("Access-Control-Allow-Headers", "mcp-protocol-version")
 }
 
 // writeProtectedResourceMetadata writes the RFC 9728 Protected Resource Metadata document for
@@ -190,6 +195,12 @@ func (m *mcpRequestContext) writeProtectedResourceMetadata(w http.ResponseWriter
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	writeProtectedResourceMetadataCORSHeaders(h)
+	if derivesFromRequest(oauth) {
+		// The body depends on these headers, so a shared cache must key on them. Omitted when
+		// resource is pinned: that response is request-independent, exactly as the static
+		// direct response was, and adding the header there would itself be a behaviour change.
+		h.Set("Vary", "Host, X-Forwarded-Proto")
+	}
 	w.WriteHeader(http.StatusOK)
 	if _, err = w.Write(body); err != nil {
 		m.l.Debug("failed to write OAuth protected resource metadata response", "error", err)

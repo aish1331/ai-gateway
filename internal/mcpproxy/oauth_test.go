@@ -155,12 +155,14 @@ func TestResourceIdentifier(t *testing.T) {
 			want:         "https://api.example.com/mcp",
 		},
 		{
-			name:         "configured resource is trimmed",
+			// Reproduces the static direct response, which emitted the configured value
+			// unchanged. The challenge URL still normalizes it; see TestResourceMetadataURL.
+			name:         "configured resource is emitted verbatim",
 			host:         "api.example.com",
 			proto:        "https",
 			resourcePath: "/mcp",
 			oauth:        &filterapi.MCPRouteOAuth{Resource: "https://api.example.com/mcp/"},
-			want:         "https://api.example.com/mcp",
+			want:         "https://api.example.com/mcp/",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -316,6 +318,28 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 		require.Equal(t, "https://canonical.example.com/mcp", doc["resource"])
 	})
 
+	// The static direct response this replaced emitted the configured value unchanged, so a
+	// route that pins resource must see a byte-identical document. The challenge URL keeps
+	// normalizing the trailing slash, as buildResourceMetadataURL always did.
+	t.Run("a configured trailing slash is preserved in the document", func(t *testing.T) {
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{
+			Issuer:   "https://auth.example.com",
+			Resource: "https://canonical.example.com/mcp/",
+		})
+		w := get(h, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
+		require.Equal(t, http.StatusOK, w.Code)
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &doc))
+		require.Equal(t, "https://canonical.example.com/mcp/", doc["resource"])
+
+		r := httptest.NewRequest(http.MethodGet, "http://placeholder/mcp", nil)
+		r.Host = "api.example.com"
+		r.Header.Set("x-forwarded-proto", "https")
+		require.Equal(t,
+			"https://canonical.example.com/.well-known/oauth-protected-resource/mcp",
+			resourceMetadataURL(r, &filterapi.MCPRouteOAuth{Resource: "https://canonical.example.com/mcp/"}, "/mcp"))
+	})
+
 	t.Run("optional fields are omitted when unset", func(t *testing.T) {
 		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
 		w := get(h, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
@@ -358,24 +382,45 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 		require.Equal(t, http.StatusNotFound, w.Code)
 	})
 
-	t.Run("CORS preflight", func(t *testing.T) {
+	// ensureCORSHeaders put exactly these on the direct response. A browser MCP client sends
+	// mcp-protocol-version, so narrowing Allow-Headers would break it.
+	t.Run("CORS headers match the previous direct response", func(t *testing.T) {
 		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
-		r := httptest.NewRequest(http.MethodOptions, "http://placeholder/.well-known/oauth-protected-resource/mcp", nil)
-		r.Header.Set(internalapi.MCPRouteHeader, routeName)
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		require.Equal(t, http.StatusNoContent, w.Code)
+		w := get(h, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
 		require.Equal(t, "*", w.Header().Get("Access-Control-Allow-Origin"))
-		require.Equal(t, "GET, OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
+		require.Equal(t, "GET", w.Header().Get("Access-Control-Allow-Methods"))
+		require.Equal(t, "mcp-protocol-version", w.Header().Get("Access-Control-Allow-Headers"))
 	})
 
-	t.Run("non GET methods are rejected", func(t *testing.T) {
+	// The rule this replaced matched on path alone, so Envoy answered every method with the
+	// document. Gating on method here would be a client-visible change.
+	t.Run("every method is answered, as a direct response was", func(t *testing.T) {
 		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
-		r := httptest.NewRequest(http.MethodDelete, "http://placeholder/.well-known/oauth-protected-resource/mcp", nil)
-		r.Header.Set(internalapi.MCPRouteHeader, routeName)
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		require.Equal(t, http.StatusMethodNotAllowed, w.Code)
+		for _, method := range []string{http.MethodGet, http.MethodOptions, http.MethodPost, http.MethodDelete, http.MethodHead} {
+			r := httptest.NewRequest(method, "http://placeholder/.well-known/oauth-protected-resource/mcp", nil)
+			r.Host = "api.example.com"
+			r.Header.Set("x-forwarded-proto", "https")
+			r.Header.Set(internalapi.MCPRouteHeader, routeName)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			require.Equal(t, http.StatusOK, w.Code, "method %s", method)
+			require.Equal(t, "application/json", w.Header().Get("Content-Type"), "method %s", method)
+		}
+	})
+
+	// A pinned resource makes the response request-independent, exactly as the static one was,
+	// so it must not acquire a Vary header. A derived one must.
+	t.Run("Vary is set only when the identifier is derived", func(t *testing.T) {
+		derived := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		w := get(derived, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
+		require.Equal(t, "Host, X-Forwarded-Proto", w.Header().Get("Vary"))
+
+		pinned := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{
+			Issuer:   "https://auth.example.com",
+			Resource: "https://api.example.com/mcp",
+		})
+		w = get(pinned, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
+		require.Empty(t, w.Header().Get("Vary"))
 	})
 }
 
