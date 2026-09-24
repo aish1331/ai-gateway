@@ -6,10 +6,14 @@
 package e2e
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -221,6 +225,46 @@ func TestMCPRouteOAuth(t *testing.T) {
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 	})
 
+	// Both places the gateway advertises the resource identifier interpolate the request
+	// authority: the 401 challenge via an Envoy substitution format string, and the metadata
+	// document via the MCP proxy. Neither escapes, so both rest on Envoy rejecting an authority
+	// that could break out of the surrounding syntax. Pin that assumption rather than trust it:
+	// if it ever stops holding, a client-supplied Host could inject an auth-param into the
+	// challenge, or a JSON key such as authorization_servers into the document, which would
+	// point clients at an attacker-chosen authorization server.
+	t.Run("a Host that could break out of the advertised syntax is rejected", func(t *testing.T) {
+		// A quote is the character that matters: it terminates the quoted auth-param in
+		// WWW-Authenticate and the JSON string literal in the metadata document.
+		const craftedHost = `evil"injected`
+
+		for _, tc := range []struct {
+			name string
+			path string
+		}{
+			{"metadata document", "/.well-known/oauth-protected-resource/mcp"},
+			{"401 challenge", "/mcp"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				status, raw := rawRequestWithHost(t, fwd.Address(), tc.path, craftedHost)
+				t.Logf("status=%d response=%q", status, raw)
+
+				if status >= 400 && status < 500 {
+					// Expected: Envoy refused the authority before anything interpolated it.
+					return
+				}
+
+				// Anything else means the crafted authority reached the response. Fail with
+				// what came back, since the remedy differs depending on where it surfaced.
+				require.NotContains(t, raw, craftedHost,
+					"gateway accepted an authority containing a quote and reflected it; "+
+						"the advertised resource identifier is injectable and must be escaped "+
+						"rather than interpolated")
+				require.Failf(t, "unexpected status",
+					"expected the gateway to reject Host %q with 4xx, got %d", craftedHost, status)
+			})
+		}
+	})
+
 	t.Run("OAuth protected resource metadata endpoint", func(t *testing.T) {
 		// Test the OAuth protected resource metadata endpoint (2025-06-18 spec).
 		metadataURLWithSuffix := fmt.Sprintf("%s/.well-known/oauth-protected-resource/mcp", fwd.Address())
@@ -402,4 +446,51 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, `scope="echo sum countdown"`, "WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 	})
+}
+
+// rawRequestWithHost writes a request over a plain TCP connection so that the Host header is
+// sent exactly as given. net/http validates outbound Host values, which would reject the
+// crafted authority client-side and mask what the gateway does with it — and the gateway's
+// behaviour is the whole point of the check.
+func rawRequestWithHost(t *testing.T, address, path, host string) (int, string) {
+	t.Helper()
+
+	u, err := url.Parse(address)
+	require.NoError(t, err)
+
+	conn, err := net.DialTimeout("tcp", u.Host, 15*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(30*time.Second)))
+
+	_, err = fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, host)
+	require.NoError(t, err)
+
+	// Read the whole exchange first so the raw bytes are available for the assertion message
+	// even when the response is not parseable as HTTP.
+	rawBytes, err := io.ReadAll(conn)
+	var timedOut bool
+	if err != nil && !errors.Is(err, io.EOF) {
+		var netErr net.Error
+		timedOut = errors.As(err, &netErr) && netErr.Timeout()
+		// A reset after an error response is normal; report what arrived before it.
+		t.Logf("read error after %d bytes: %v", len(rawBytes), err)
+	}
+	raw := string(rawBytes)
+	if raw == "" {
+		// Distinguish a refusal from a hang. Closing the connection without replying is a
+		// rejection and counts as a pass, but timing out proves nothing either way and must
+		// not be mistaken for one.
+		require.Falsef(t, timedOut,
+			"gateway neither replied nor closed the connection for Host %q; result is inconclusive", host)
+		return http.StatusBadRequest, raw
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(raw)), nil)
+	if err != nil {
+		t.Logf("response was not parseable as HTTP: %v", err)
+		return 0, raw
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, raw
 }
