@@ -41,9 +41,14 @@ func (s *Server) maybeGenerateResourcesForMCPGateway(req *egextension.PostTransl
 	if len(req.Listeners) == 0 || len(req.Routes) == 0 {
 		return nil // Nothing to do, mostly for unit tests.
 	}
+	// Collected up front: createRoutesForBackendListener below moves the per-backend routes onto
+	// their own route configuration, and both passes that follow need to know which clusters the
+	// remaining routes send to the proxy.
+	mcpProxyClusters := mcpProxyClusterNames(req.Routes)
+
 	// Update existing MCP routes to remove JWT authn filter from non-proxy rules.
 	// Order matters: do this before moving rules to the backend listener.
-	s.maybeUpdateMCPRoutes(req.Routes)
+	s.maybeUpdateMCPRoutes(req.Routes, mcpProxyClusters)
 
 	// Create routes for the backend listener first to determine if MCP processing is needed
 	mcpBackendRoutes := s.createRoutesForBackendListener(req.Routes)
@@ -64,7 +69,7 @@ func (s *Server) maybeGenerateResourcesForMCPGateway(req *egextension.PostTransl
 	}
 
 	// Modify routes with mcp-gateway-generated annotation to use mcpproxy-cluster.
-	s.modifyMCPGatewayGeneratedCluster(req.Clusters)
+	s.modifyMCPGatewayGeneratedCluster(req.Clusters, mcpProxyClusters)
 	return nil
 }
 
@@ -169,30 +174,51 @@ func (s *Server) createBackendListener(mcpHTTPFilters []*httpconnectionmanagerv3
 }
 
 // maybeUpdateMCPRoutes updates the mcp routes with necessary changes for MCP Gateway.
-func (s *Server) maybeUpdateMCPRoutes(routes []*routev3.RouteConfiguration) {
+//
+// mcpProxyClusters holds the clusters that resolve to the in-pod MCP proxy, keyed by name.
+func (s *Server) maybeUpdateMCPRoutes(routes []*routev3.RouteConfiguration, mcpProxyClusters map[string]bool) {
 	for _, routeConfig := range routes {
 		for _, vh := range routeConfig.VirtualHosts {
 			for _, route := range vh.Routes {
-				if strings.Contains(route.Name, internalapi.MCPMainHTTPRoutePrefix) {
-					// The frontend mcp proxy route(rule/0) forwards to the in-process HTTP MCP proxy.
-					if strings.Contains(route.Name, "rule/0") {
-						// The MCP proxy can only read HTTP headers, so render the trusted shim's
-						// dynamic metadata into headers here. See mcpProxyDynamicMetadataHeaders.
-						route.RequestHeadersToAdd = append(route.RequestHeadersToAdd, mcpProxyDynamicMetadataHeaders()...)
-						continue
-					}
-					// Remove the authn filters from the well-known and backend routes.
-					// TODO: remove this step once the SecurityPolicy can target the MCP proxy route rule only.
-					for _, filterName := range []string{filterNameJWTAuthn, filterNameAPIKeyAuth, filterNameExtAuth} {
-						if _, ok := route.TypedPerFilterConfig[filterName]; ok {
-							s.log.Info("removing authn filter from well-known and backend routes", "route", route.Name, "filter", filterName)
-							delete(route.TypedPerFilterConfig, filterName)
-						}
+				if !strings.Contains(route.Name, internalapi.MCPMainHTTPRoutePrefix) {
+					continue
+				}
+				if mcpProxyClusters[route.GetRoute().GetCluster()] {
+					// The MCP proxy can only read HTTP headers, so render the trusted shim's
+					// dynamic metadata into headers here. See mcpProxyDynamicMetadataHeaders.
+					route.RequestHeadersToAdd = append(route.RequestHeadersToAdd, mcpProxyDynamicMetadataHeaders()...)
+				}
+				// The SecurityPolicy targets the whole HTTPRoute, so strip authn back off the
+				// OAuth discovery documents: a client fetches those precisely because it does
+				// not have a token yet. Everything else on this HTTPRoute is MCP traffic and
+				// keeps the authn filters.
+				// TODO: remove this step once the SecurityPolicy can target the MCP proxy route rule only.
+				if !isOAuthWellKnownRoute(route) {
+					continue
+				}
+				for _, filterName := range []string{filterNameJWTAuthn, filterNameAPIKeyAuth, filterNameExtAuth} {
+					if _, ok := route.TypedPerFilterConfig[filterName]; ok {
+						s.log.Info("removing authn filter from well-known route", "route", route.Name, "filter", filterName)
+						delete(route.TypedPerFilterConfig, filterName)
 					}
 				}
 			}
 		}
 	}
+}
+
+// isOAuthWellKnownRoute reports whether the route serves one of the OAuth discovery documents
+// the controller adds to the main MCP HTTPRoute. They are generated as exact matches on a
+// well-known path, optionally suffixed with the route's serving path, so the path identifies
+// them without depending on the order the rules happen to be emitted in.
+func isOAuthWellKnownRoute(route *routev3.Route) bool {
+	path := route.GetMatch().GetPath()
+	if path == "" {
+		return false // Not an exact path match, so not one of the generated well-known rules.
+	}
+	return slices.ContainsFunc(internalapi.MCPOAuthWellKnownPaths, func(wellKnown string) bool {
+		return strings.HasPrefix(path, wellKnown)
+	})
 }
 
 // mcpProxyDynamicMetadataHeaders returns the request header mutations applied on the
@@ -275,11 +301,41 @@ func (s *Server) createRoutesForBackendListener(routes []*routev3.RouteConfigura
 	return mcpRouteConfig
 }
 
-// modifyMCPGatewayGeneratedRoutes finds the mcp proxy dummy IP in the clusters and
-// swaps it to the localhost.
-func (s *Server) modifyMCPGatewayGeneratedCluster(clusters []*clusterv3.Cluster) {
+// mcpProxyClusterNames returns, keyed by cluster name, the clusters that carry traffic to the
+// in-pod MCP proxy.
+//
+// They are derived from the routes rather than from the index of the HTTPRoute rule that
+// produced them. The main MCP HTTPRoute forwards more than one rule to the proxy — the MCP
+// endpoint and the OAuth protected resource metadata endpoint — and which index each lands on is
+// an implementation detail of newMainHTTPRoute. The shared MCP proxy Backend is the only
+// backendRef that HTTPRoute ever names, so every one of its rules that forwards anywhere
+// forwards to the proxy; the rules serving the remaining OAuth discovery documents are direct
+// responses and have no cluster at all.
+//
+// The Backend's placeholder endpoint cannot be used to recognize them instead: Envoy Gateway
+// serves IP endpoints over EDS, so the clusters it hands the extension server carry no address.
+func mcpProxyClusterNames(routes []*routev3.RouteConfiguration) map[string]bool {
+	names := make(map[string]bool)
+	for _, routeConfig := range routes {
+		for _, vh := range routeConfig.VirtualHosts {
+			for _, route := range vh.Routes {
+				if !strings.Contains(route.Name, internalapi.MCPMainHTTPRoutePrefix) {
+					continue
+				}
+				if cluster := route.GetRoute().GetCluster(); cluster != "" {
+					names[cluster] = true
+				}
+			}
+		}
+	}
+	return names
+}
+
+// modifyMCPGatewayGeneratedCluster points every cluster that carries traffic to the MCP proxy at
+// the in-pod proxy on localhost, replacing the shared Backend's unroutable placeholder endpoint.
+func (s *Server) modifyMCPGatewayGeneratedCluster(clusters []*clusterv3.Cluster, mcpProxyClusters map[string]bool) {
 	for _, c := range clusters {
-		if strings.Contains(c.Name, internalapi.MCPMainHTTPRoutePrefix) && strings.HasSuffix(c.Name, "/rule/0") {
+		if mcpProxyClusters[c.Name] {
 			name := c.Name
 			*c = clusterv3.Cluster{
 				Name:                 name,

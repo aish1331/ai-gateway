@@ -191,42 +191,26 @@ func TestServer_createRoutesForBackendListener(t *testing.T) {
 	}
 }
 
-func TestServer_modifyMCPGatewayGeneratedCluster(t *testing.T) {
-	tests := []struct {
-		name             string
-		clusters         []*clusterv3.Cluster
-		expectedClusters []*clusterv3.Cluster
-	}{
-		{
-			name: "modifies MCP cluster",
-			clusters: []*clusterv3.Cluster{
-				{Name: "normal-cluster"},
-				{Name: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"},
-			},
-			expectedClusters: []*clusterv3.Cluster{
-				{Name: "normal-cluster"},
+// rewrittenMCPProxyCluster is what modifyMCPGatewayGeneratedCluster must leave behind: a static
+// cluster pointing at the in-pod proxy on localhost.
+func rewrittenMCPProxyCluster(name string) *clusterv3.Cluster {
+	return &clusterv3.Cluster{
+		Name:                 name,
+		ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC},
+		ConnectTimeout:       &durationpb.Duration{Seconds: 10},
+		LoadAssignment: &endpointv3.ClusterLoadAssignment{
+			ClusterName: name,
+			Endpoints: []*endpointv3.LocalityLbEndpoints{
 				{
-					Name:                 internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0",
-					ClusterDiscoveryType: &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC},
-					ConnectTimeout:       &durationpb.Duration{Seconds: 10},
-					LoadAssignment: &endpointv3.ClusterLoadAssignment{
-						ClusterName: internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0",
-						Endpoints: []*endpointv3.LocalityLbEndpoints{
-							{
-								LbEndpoints: []*endpointv3.LbEndpoint{
-									{
-										HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
-											Endpoint: &endpointv3.Endpoint{
-												Address: &corev3.Address{
-													Address: &corev3.Address_SocketAddress{
-														SocketAddress: &corev3.SocketAddress{
-															Address: "127.0.0.1",
-															PortSpecifier: &corev3.SocketAddress_PortValue{
-																PortValue: internalapi.MCPProxyPort,
-															},
-														},
-													},
-												},
+					LbEndpoints: []*endpointv3.LbEndpoint{
+						{
+							HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
+								Endpoint: &endpointv3.Endpoint{
+									Address: &corev3.Address{
+										Address: &corev3.Address_SocketAddress{
+											SocketAddress: &corev3.SocketAddress{
+												Address:       "127.0.0.1",
+												PortSpecifier: &corev3.SocketAddress_PortValue{PortValue: internalapi.MCPProxyPort},
 											},
 										},
 									},
@@ -238,17 +222,69 @@ func TestServer_modifyMCPGatewayGeneratedCluster(t *testing.T) {
 			},
 		},
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &Server{log: testr.New(t)}
-			s.modifyMCPGatewayGeneratedCluster(tt.clusters)
-
-			for i, expectedCluster := range tt.expectedClusters {
-				require.Empty(t, cmp.Diff(expectedCluster, tt.clusters[i], protocmp.Transform()))
-			}
-		})
+func TestServer_mcpProxyClusterNames(t *testing.T) {
+	// Envoy Gateway serves the proxy Backend's IP endpoint over EDS, so the clusters carry no
+	// address and the routes are the only place the proxy-bound rules can be recognized.
+	routes := []*routev3.RouteConfiguration{
+		{
+			VirtualHosts: []*routev3.VirtualHost{
+				{
+					Name: "vh",
+					Routes: []*routev3.Route{
+						// The MCP endpoint and the protected resource metadata endpoint both
+						// forward to the shared proxy Backend, on whichever rule index they land.
+						forwardingMCPRoute(internalapi.MCPMainHTTPRoutePrefix+"foo/rule/0", "cluster/rule/0"),
+						forwardingMCPRoute(internalapi.MCPMainHTTPRoutePrefix+"foo/rule/1", "cluster/rule/1"),
+						// The remaining discovery documents are direct responses, so no cluster.
+						{Name: internalapi.MCPMainHTTPRoutePrefix + "foo/rule/2", Action: &routev3.Route_DirectResponse{
+							DirectResponse: &routev3.DirectResponseAction{Status: 200},
+						}},
+						// Not the main MCP HTTPRoute.
+						forwardingMCPRoute(internalapi.MCPPerBackendRefHTTPRoutePrefix+"foo/rule/0", "cluster/backend"),
+						forwardingMCPRoute("httproute/ns/user-route/rule/0", "cluster/user"),
+					},
+				},
+			},
+		},
 	}
+
+	require.Equal(t, map[string]bool{"cluster/rule/0": true, "cluster/rule/1": true}, mcpProxyClusterNames(routes))
+}
+
+func forwardingMCPRoute(name, cluster string) *routev3.Route {
+	return &routev3.Route{
+		Name: name,
+		Action: &routev3.Route_Route{Route: &routev3.RouteAction{
+			ClusterSpecifier: &routev3.RouteAction_Cluster{Cluster: cluster},
+		}},
+	}
+}
+
+func TestServer_modifyMCPGatewayGeneratedCluster(t *testing.T) {
+	const (
+		mcpRule0 = internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/0"
+		mcpRule1 = internalapi.MCPMainHTTPRoutePrefix + "foo-bar/rule/1"
+	)
+	// The OAuth metadata rule is not rule/0, and used to be left pointing at the unroutable
+	// placeholder Backend, which made the metadata endpoint hang.
+	clusters := []*clusterv3.Cluster{
+		{Name: "normal-cluster"},
+		{Name: mcpRule0},
+		{Name: mcpRule1},
+		{Name: internalapi.MCPPerBackendRefHTTPRoutePrefix + "foo-bar/rule/0"},
+	}
+
+	s := &Server{log: testr.New(t)}
+	s.modifyMCPGatewayGeneratedCluster(clusters, map[string]bool{mcpRule0: true, mcpRule1: true})
+
+	require.Empty(t, cmp.Diff([]*clusterv3.Cluster{
+		{Name: "normal-cluster"},
+		rewrittenMCPProxyCluster(mcpRule0),
+		rewrittenMCPProxyCluster(mcpRule1),
+		{Name: internalapi.MCPPerBackendRefHTTPRoutePrefix + "foo-bar/rule/0"},
+	}, clusters, protocmp.Transform()))
 }
 
 func TestServer_isMCPBackendHTTPFilter(t *testing.T) {
@@ -280,90 +316,94 @@ func TestServer_isMCPBackendHTTPFilter(t *testing.T) {
 
 func TestServer_maybeUpdateMCPRoutes(t *testing.T) {
 	emptyConfig := &anypb.Any{TypeUrl: "type.googleapis.com/google.protobuf.Empty"}
-
-	tests := []struct {
-		name           string
-		routes         []*routev3.RouteConfiguration
-		expectedRoutes []*routev3.RouteConfiguration
-	}{
+	allAuthnFilters := func() map[string]*anypb.Any {
+		return map[string]*anypb.Any{
+			filterNameJWTAuthn:   emptyConfig,
+			filterNameAPIKeyAuth: emptyConfig,
+			filterNameExtAuth:    emptyConfig,
+			"other-filter":       emptyConfig,
+		}
+	}
+	// The header injection applied to every route that lands on the in-pod MCP proxy.
+	proxyHeaders := []*corev3.HeaderValueOption{
 		{
-			name: "removes JWT from backend routes",
-			routes: []*routev3.RouteConfiguration{
-				{
-					VirtualHosts: []*routev3.VirtualHost{
-						{
-							Name: "vh",
-							Routes: []*routev3.Route{
-								{
-									Name: internalapi.MCPMainHTTPRoutePrefix + "foo/rule/0",
-									TypedPerFilterConfig: map[string]*anypb.Any{
-										filterNameJWTAuthn:   emptyConfig,
-										filterNameAPIKeyAuth: emptyConfig,
-										filterNameExtAuth:    emptyConfig,
-									},
-								},
-								{
-									Name: internalapi.MCPMainHTTPRoutePrefix + "foo/rule/1",
-									TypedPerFilterConfig: map[string]*anypb.Any{
-										filterNameJWTAuthn:   emptyConfig,
-										filterNameAPIKeyAuth: emptyConfig,
-										filterNameExtAuth:    emptyConfig,
-										"other-filter":       emptyConfig,
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			expectedRoutes: []*routev3.RouteConfiguration{
-				{
-					VirtualHosts: []*routev3.VirtualHost{
-						{
-							Name: "vh",
-							Routes: []*routev3.Route{
-								{
-									Name: internalapi.MCPMainHTTPRoutePrefix + "foo/rule/0",
-									TypedPerFilterConfig: map[string]*anypb.Any{
-										filterNameJWTAuthn:   emptyConfig,
-										filterNameAPIKeyAuth: emptyConfig,
-										filterNameExtAuth:    emptyConfig,
-									},
-									// rule/0 (frontend MCP proxy route) gets the dynamic-metadata -> header
-									// injection so the HTTP MCP proxy can read the backend subset; authn is
-									// preserved.
-									RequestHeadersToAdd: []*corev3.HeaderValueOption{
-										{
-											AppendAction:   corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-											KeepEmptyValue: true,
-											Header: &corev3.HeaderValue{
-												Key:   internalapi.MCPBackendSubsetHeader,
-												Value: `%DYNAMIC_METADATA(["aigateway.envoy.io", "mcp_backend_subset"])%`,
-											},
-										},
-									},
-								},
-								{
-									Name: internalapi.MCPMainHTTPRoutePrefix + "foo/rule/1",
-									TypedPerFilterConfig: map[string]*anypb.Any{
-										"other-filter": emptyConfig,
-									},
-								},
-							},
-						},
-					},
-				},
+			AppendAction:   corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			KeepEmptyValue: true,
+			Header: &corev3.HeaderValue{
+				Key:   internalapi.MCPBackendSubsetHeader,
+				Value: `%DYNAMIC_METADATA(["aigateway.envoy.io", "mcp_backend_subset"])%`,
 			},
 		},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &Server{log: testr.New(t)}
-			s.maybeUpdateMCPRoutes(tt.routes)
-			require.Empty(t, cmp.Diff(tt.expectedRoutes, tt.routes, protocmp.Transform()))
-		})
+	route := func(name, path, cluster string) *routev3.Route {
+		r := &routev3.Route{
+			Name:                 name,
+			Match:                &routev3.RouteMatch{PathSpecifier: &routev3.RouteMatch_Path{Path: path}},
+			TypedPerFilterConfig: allAuthnFilters(),
+		}
+		if cluster != "" {
+			r.Action = &routev3.Route_Route{Route: &routev3.RouteAction{
+				ClusterSpecifier: &routev3.RouteAction_Cluster{Cluster: cluster},
+			}}
+		}
+		return r
 	}
+	wrap := func(routes ...*routev3.Route) []*routev3.RouteConfiguration {
+		return []*routev3.RouteConfiguration{{VirtualHosts: []*routev3.VirtualHost{{Name: "vh", Routes: routes}}}}
+	}
+
+	const (
+		mcpCluster      = internalapi.MCPMainHTTPRoutePrefix + "foo/rule/0"
+		metadataCluster = internalapi.MCPMainHTTPRoutePrefix + "foo/rule/1"
+	)
+	proxyClusters := map[string]bool{mcpCluster: true, metadataCluster: true}
+
+	t.Run("keeps authn on the MCP rule and strips it from the well-known rules", func(t *testing.T) {
+		mcp := route(internalapi.MCPMainHTTPRoutePrefix+"foo/rule/0", "/mcp", mcpCluster)
+		metadata := route(internalapi.MCPMainHTTPRoutePrefix+"foo/rule/1", "/.well-known/oauth-protected-resource/mcp", metadataCluster)
+		authServer := route(internalapi.MCPMainHTTPRoutePrefix+"foo/rule/2", "/.well-known/oauth-authorization-server/mcp", "")
+		routes := wrap(mcp, metadata, authServer)
+
+		s := &Server{log: testr.New(t)}
+		s.maybeUpdateMCPRoutes(routes, proxyClusters)
+
+		// The MCP endpoint is the protected one: authn stays, and the proxy gets the trusted
+		// backend subset rendered into a header.
+		require.Equal(t, allAuthnFilters(), mcp.TypedPerFilterConfig)
+		require.Empty(t, cmp.Diff(proxyHeaders, mcp.RequestHeadersToAdd, protocmp.Transform()))
+
+		// The metadata endpoint is served by the proxy too, but a client fetches it precisely
+		// because it has no token yet, so it must not be behind authn.
+		require.Equal(t, map[string]*anypb.Any{"other-filter": emptyConfig}, metadata.TypedPerFilterConfig)
+		require.Empty(t, cmp.Diff(proxyHeaders, metadata.RequestHeadersToAdd, protocmp.Transform()))
+
+		// The authorization server document is a direct response, so no proxy headers.
+		require.Equal(t, map[string]*anypb.Any{"other-filter": emptyConfig}, authServer.TypedPerFilterConfig)
+		require.Empty(t, authServer.RequestHeadersToAdd)
+	})
+
+	t.Run("keeps authn on an MCP rule served under an unrelated well-known path", func(t *testing.T) {
+		// Only the OAuth discovery documents are public. An MCPRoute whose serving path happens
+		// to sit under /.well-known/ is still MCP traffic and must stay authenticated.
+		mcp := route(internalapi.MCPMainHTTPRoutePrefix+"foo/rule/0", "/.well-known/mcp", mcpCluster)
+		routes := wrap(mcp)
+
+		s := &Server{log: testr.New(t)}
+		s.maybeUpdateMCPRoutes(routes, proxyClusters)
+
+		require.Equal(t, allAuthnFilters(), mcp.TypedPerFilterConfig)
+	})
+
+	t.Run("ignores routes that are not MCP main routes", func(t *testing.T) {
+		other := route("httproute/ns/user-route/rule/0", "/mcp", mcpCluster)
+		routes := wrap(other)
+
+		s := &Server{log: testr.New(t)}
+		s.maybeUpdateMCPRoutes(routes, proxyClusters)
+
+		require.Equal(t, allAuthnFilters(), other.TypedPerFilterConfig)
+		require.Empty(t, other.RequestHeadersToAdd)
+	})
 }
 
 func TestServer_extractMCPBackendFiltersFromMCPProxyListener(t *testing.T) {
@@ -563,6 +603,8 @@ func TestServer_maybeGenerateResourcesForMCPGateway(t *testing.T) {
 											Route: &routev3.RouteAction{ClusterSpecifier: &routev3.RouteAction_Cluster{}},
 										},
 									},
+									forwardingMCPRoute(internalapi.MCPMainHTTPRoutePrefix+"foo-bar/rule/0",
+										internalapi.MCPMainHTTPRoutePrefix+"foo-bar/rule/0"),
 								},
 							},
 						},
@@ -580,8 +622,8 @@ func TestServer_maybeGenerateResourcesForMCPGateway(t *testing.T) {
 				require.Equal(t, "aigateway-mcp-backend-listener-route-config", req.Routes[1].Name)
 
 				require.Len(t, req.Clusters, 1)
-				require.Equal(t, internalapi.MCPMainHTTPRoutePrefix+"foo-bar/rule/0", req.Clusters[0].Name)
-				require.Equal(t, clusterv3.Cluster_STATIC, req.Clusters[0].GetClusterDiscoveryType().(*clusterv3.Cluster_Type).Type)
+				require.Empty(t, cmp.Diff(rewrittenMCPProxyCluster(internalapi.MCPMainHTTPRoutePrefix+"foo-bar/rule/0"),
+					req.Clusters[0], protocmp.Transform()))
 			},
 		},
 	}

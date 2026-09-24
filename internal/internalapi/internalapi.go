@@ -63,6 +63,17 @@ const (
 	// MCPPerBackendCredentialSecretPrefix is the prefix for the credential secrets created for per-backend credential injection.
 	MCPPerBackendCredentialSecretPrefix = MCPGeneratedResourceCommonPrefix + "cred-"
 
+	// OAuthProtectedResourceMetadataPath is the well-known path that serves the OAuth 2.0
+	// Protected Resource Metadata document (RFC 9728 section 3).
+	OAuthProtectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
+	// OAuthAuthorizationServerMetadataPath is the well-known path that serves the OAuth 2.0
+	// Authorization Server Metadata document (RFC 8414 section 3), kept for MCP spec 2025-03-26
+	// clients that look for the authorization server there.
+	OAuthAuthorizationServerMetadataPath = "/.well-known/oauth-authorization-server"
+	// OIDCConfigurationPath is the well-known path that serves the OpenID Connect discovery
+	// document, the OIDC-flavored equivalent of OAuthAuthorizationServerMetadataPath.
+	OIDCConfigurationPath = "/.well-known/openid-configuration"
+
 	// MCPMetadataHeaderPrefix is the prefix for special headers used to pass metadata in the filter metadata.
 	// These headers are added internally to the requests to the upstream servers so they can be populated in the filter
 	// metadata. These headers are considered just internal, and they'll be removed once they are stored in the filter
@@ -90,6 +101,17 @@ const (
 // controller builds its strip list from it, the extproc reads them; it lives here so both agree.
 func AWSCredentialOverrideHeaderNames(prefix string) (accessKeyID, secretAccessKey, sessionToken string) {
 	return prefix + "access-key-id", prefix + "secret-access-key", prefix + "session-token"
+}
+
+// MCPOAuthWellKnownPaths are the OAuth discovery documents the controller appends to the main
+// MCP HTTPRoute, each as a rule matching the path exactly, optionally suffixed with the route's
+// serving path. They must stay reachable without a token, since a client fetches them precisely
+// because it does not have one yet; the extension server uses this list to tell them apart from
+// the MCP endpoint itself, which is the rule that keeps client authentication.
+var MCPOAuthWellKnownPaths = []string{
+	OAuthProtectedResourceMetadataPath,
+	OAuthAuthorizationServerMetadataPath,
+	OIDCConfigurationPath,
 }
 
 // MCPInternalHeadersToMetadata maps special MCP headers to metadata keys.

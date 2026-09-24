@@ -343,6 +343,11 @@ type MCPRouteOAuth struct {
 	// It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.
 	// Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation
 	//
+	// This must agree with the resource identifier the gateway advertises, which is what a
+	// client asks the authorization server to bind the token's "aud" claim to. Either list
+	// every URL the MCPRoute is reachable at, or pin
+	// ProtectedResourceMetadata.Resource to a value listed here.
+	//
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=32
 	// +optional
@@ -591,8 +596,14 @@ type ProtectedResourceMetadata struct {
 	//
 	// When omitted, the gateway derives the resource identifier per request from the
 	// scheme, authority and path the client actually used to reach the MCP endpoint.
-	// Leave it unset unless the gateway is fronted by something that rewrites the
-	// externally visible URL in a way the forwarded headers do not reflect.
+	//
+	// Set it when the derived identifier would be wrong or would disagree with Audiences:
+	//   - Audiences is set. Clients send the advertised identifier to the authorization
+	//     server as the RFC 8707 resource parameter, which binds the token's "aud" claim to
+	//     it, so a derived identifier that is not listed in Audiences yields tokens the
+	//     gateway then rejects. Pin this to a value listed in Audiences.
+	//   - The gateway is fronted by something that rewrites the externally visible URL in a
+	//     way the forwarded headers do not reflect.
 	//
 	// +kubebuilder:validation:Format=uri
 	// +optional

@@ -318,6 +318,9 @@ spec:
       audiences:
         - "https://api.example.com/mcp"
       protectedResourceMetadata:
+        # Pinned because audiences is set: the two must name the same URL.
+        # See "The resource identifier" below.
+        resource: "https://api.example.com/mcp"
         scopesSupported:
           - "profile"
           - "email"
@@ -332,21 +335,53 @@ so it has to match exactly, down to the scheme and port.
 
 By default the gateway derives it per request, from the scheme (the forwarded protocol), the
 authority (host and port) and the path the client actually used. One MCPRoute therefore serves
-the correct identifier on every hostname and port it is reachable on, with nothing to configure
-and nothing to keep in sync when the gateway moves.
+the correct identifier on every hostname and port it is reachable on, with nothing to configure.
 
-Set `protectedResourceMetadata.resource` explicitly only when the externally visible URL cannot
-be recovered from the request — for example behind a CDN or reverse proxy that rewrites the
-authority without setting the forwarded headers. An explicit value always wins:
+Set `protectedResourceMetadata.resource` explicitly when:
+
+- **You validate token audiences.** The derived identifier must agree with `audiences`; see
+  below.
+- **The externally visible URL cannot be recovered from the request** — for example behind a
+  CDN or reverse proxy that rewrites the authority without setting the forwarded headers.
+
+An explicit value always wins:
 
 ```yaml
 protectedResourceMetadata:
   resource: "https://api.example.com/mcp"
 ```
 
-Because the identifier is resolved per request, the gateway trusts the `Host` and
-`X-Forwarded-Proto` headers it receives. Envoy sanitizes these by default; if you have
-configured the listener to trust downstream forwarded headers, make sure that is intentional.
+##### Keeping `audiences` in sync
+
+A client that implements [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) sends the
+advertised identifier back to the authorization server as the `resource` parameter, and the
+server binds the issued token's `aud` claim to it. The gateway validates `aud` against
+`securityPolicy.oauth.audiences`, which is static — so the derived identifier and `audiences`
+have to name the same URL.
+
+If `audiences` is `https://api.example.com/mcp` but a client reaches the gateway at
+`http://127.0.0.1:1975/mcp`, the gateway advertises the latter, the authorization server mints a
+token whose `aud` is the latter, and JWT validation then rejects it. The client sees another 401
+and re-authorizes into the same failure. Pick one of:
+
+- Pin `protectedResourceMetadata.resource` to a value listed in `audiences`.
+- List every URL the gateway is reachable at in `audiences`.
+- Leave `audiences` unset, so only the issuer is checked. This is the only option that needs no
+  configuration at all, but it is the weakest: a token the same issuer minted for a different
+  resource is accepted.
+
+##### Trusted headers
+
+Because the identifier is resolved per request, it comes from request headers. Envoy overwrites
+`X-Forwarded-Proto` with the scheme of the downstream connection, so a client cannot forge the
+scheme unless the listener is configured to trust the downstream value.
+
+`Host` is **not** sanitized: Envoy forwards the authority the client sent, constrained only by
+the listener's hostname matching. On a listener that accepts any hostname, a client can
+therefore choose the authority the gateway advertises in the metadata document and the
+`WWW-Authenticate` challenge. If that matters for your deployment, constrain the accepted
+hostnames on the MCPRoute (`spec.hostnames`) or the Gateway listener, or pin
+`protectedResourceMetadata.resource`.
 
 The OAuth flow follows the MCP specification's authorization code flow with PKCE:
 

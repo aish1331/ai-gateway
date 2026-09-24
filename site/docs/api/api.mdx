@@ -2154,7 +2154,7 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
   name="audiences"
   type="string array"
   required="false"
-  description="Audiences is a list of JWT audiences allowed access.<br />It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.<br />Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation"
+  description="Audiences is a list of JWT audiences allowed access.<br />It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.<br />Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation<br />This must agree with the resource identifier the gateway advertises, which is what a<br />client asks the authorization server to bind the token's `aud` claim to. Either list<br />every URL the MCPRoute is reachable at, or pin<br />ProtectedResourceMetadata.Resource to a value listed here."
 /><ApiField
   name="jwks"
   type="[JWKS](#github-com-envoyproxy-ai-gateway-api-v1alpha1-jwks)"
@@ -2377,7 +2377,7 @@ References:
   name="resource"
   type="string"
   required="false"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Leave it unset unless the gateway is fronted by something that rewrites the<br />externally visible URL in a way the forwarded headers do not reflect."
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Set it when the derived identifier would be wrong or would disagree with Audiences:<br />  - Audiences is set. Clients send the advertised identifier to the authorization<br />    server as the RFC 8707 resource parameter, which binds the token's `aud` claim to<br />    it, so a derived identifier that is not listed in Audiences yields tokens the<br />    gateway then rejects. Pin this to a value listed in Audiences.<br />  - The gateway is fronted by something that rewrites the externally visible URL in a<br />    way the forwarded headers do not reflect."
 /><ApiField
   name="resourceName"
   type="string"
@@ -4973,7 +4973,7 @@ Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/author
   name="audiences"
   type="string array"
   required="false"
-  description="Audiences is a list of JWT audiences allowed access.<br />It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.<br />Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation"
+  description="Audiences is a list of JWT audiences allowed access.<br />It is recommended to set this field for token audience validation, as it is a security best practice to prevent token misuse.<br />Reference: https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#token-audience-binding-and-validation<br />This must agree with the resource identifier the gateway advertises, which is what a<br />client asks the authorization server to bind the token's `aud` claim to. Either list<br />every URL the MCPRoute is reachable at, or pin<br />ProtectedResourceMetadata.Resource to a value listed here."
 /><ApiField
   name="jwks"
   type="[JWKS](#github-com-envoyproxy-ai-gateway-api-v1beta1-jwks)"
@@ -5209,7 +5209,7 @@ References:
   name="resource"
   type="string"
   required="false"
-  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Leave it unset unless the gateway is fronted by something that rewrites the<br />externally visible URL in a way the forwarded headers do not reflect."
+  description="Resource is the identifier of the protected resource.<br />This should match the MCPRoute's URL. For example, if the MCPRoute's URL is<br />`https://api.example.com/mcp`, the Resource should be `https://api.example.com/mcp`.<br />When omitted, the gateway derives the resource identifier per request from the<br />scheme, authority and path the client actually used to reach the MCP endpoint.<br />Set it when the derived identifier would be wrong or would disagree with Audiences:<br />  - Audiences is set. Clients send the advertised identifier to the authorization<br />    server as the RFC 8707 resource parameter, which binds the token's `aud` claim to<br />    it, so a derived identifier that is not listed in Audiences yields tokens the<br />    gateway then rejects. Pin this to a value listed in Audiences.<br />  - The gateway is fronted by something that rewrites the externally visible URL in a<br />    way the forwarded headers do not reflect."
 /><ApiField
   name="resourceName"
   type="string"

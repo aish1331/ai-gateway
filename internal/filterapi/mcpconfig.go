@@ -171,8 +171,8 @@ type MCPRouteAuthorization struct {
 //
 // The resource identifier itself is deliberately not part of this configuration unless the
 // operator overrides it: it is computed per request from the scheme, authority and path the
-// client actually used, so a single configuration stays correct behind any hostname, port or
-// TLS termination point. See RFC 9728 and the MCP authorization spec:
+// client actually used, so a single configuration serves the right identifier behind any
+// hostname, port or TLS termination point. See RFC 9728 and the MCP authorization spec:
 // * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
 // * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
 type MCPRouteOAuth struct {
@@ -181,8 +181,9 @@ type MCPRouteOAuth struct {
 	Issuer string `json:"issuer"`
 
 	// Resource, when non-empty, pins the resource identifier instead of deriving it from the
-	// request. Set it only when the externally visible URL cannot be recovered from the
-	// request, e.g. behind a proxy that rewrites the authority without forwarding headers.
+	// request. It is set when the externally visible URL cannot be recovered from the request
+	// (e.g. behind a proxy that rewrites the authority without forwarding headers), or when the
+	// route validates token audiences, which are static and must name the advertised identifier.
 	Resource string `json:"resource,omitempty"`
 
 	// ResourceName is a human-readable name for the protected resource.

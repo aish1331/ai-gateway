@@ -14,15 +14,14 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/json"
 )
 
-const (
-	// oauthProtectedResourceMetadataPath is the well-known path prefix that serves the OAuth
-	// Protected Resource Metadata document.
-	//
-	// References:
-	// * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
-	// * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-server-location
-	oauthProtectedResourceMetadataPath = "/.well-known/oauth-protected-resource"
-)
+// oauthProtectedResourceMetadataPath is the well-known path prefix that serves the OAuth
+// Protected Resource Metadata document. The controller generates the route rule that lands
+// here, so both sides share one definition.
+//
+// References:
+// * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
+// * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization#authorization-server-location
+const oauthProtectedResourceMetadataPath = internalapi.OAuthProtectedResourceMetadataPath
 
 // isProtectedResourceMetadataRequest reports whether the request targets the OAuth Protected
 // Resource Metadata endpoint. Envoy has already matched the request to the dedicated route rule
@@ -74,8 +73,14 @@ func externalPath(r *http.Request) string {
 // was made against. resourcePath is the path of the MCP endpoint itself, i.e. the request path
 // with any well-known prefix already removed.
 //
+// The authority comes from the Host header. Unlike X-Forwarded-Proto, Envoy does not overwrite
+// it: it is the authority the client sent, narrowed only by the listener's hostname matching.
+// A listener that accepts any hostname therefore lets the client choose the authority that is
+// advertised here, which is one of the reasons an operator may want to pin the value.
+//
 // A configured override always wins, so an operator fronted by something that rewrites the
-// externally visible URL without forwarding headers can still pin the value.
+// externally visible URL without forwarding headers can still pin the value, as can one whose
+// static token audiences must match a single identifier.
 func resourceIdentifier(r *http.Request, oauth *filterapi.MCPRouteOAuth, resourcePath string) string {
 	if oauth != nil && oauth.Resource != "" {
 		return strings.TrimSuffix(oauth.Resource, "/")

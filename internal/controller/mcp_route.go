@@ -30,8 +30,13 @@ import (
 )
 
 const (
-	defaultMCPPath         = "/mcp"
-	mcpProxyBackendDummyIP = "192.0.2.42" // RFC 5737 TEST-NET-2, used as a dummy IP.
+	defaultMCPPath = "/mcp"
+	// mcpProxyBackendDummyIP is the placeholder endpoint of the shared MCP proxy Backend
+	// (RFC 5737 TEST-NET-2). The Backend exists only to give the generated HTTPRoute rules
+	// something to reference; the extension server repoints the clusters Envoy Gateway derives
+	// from it at the in-pod proxy on localhost. It stays unroutable so a rule that the extension
+	// server misses fails outright instead of leaking traffic somewhere.
+	mcpProxyBackendDummyIP = "192.0.2.42"
 )
 
 // MCPRouteController implements [reconcile.TypedReconciler].

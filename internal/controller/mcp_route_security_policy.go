@@ -32,9 +32,11 @@ import (
 )
 
 const (
-	oauthWellKnownProtectedResourceMetadataPath   = "/.well-known/oauth-protected-resource"
-	oauthWellKnownAuthorizationServerMetadataPath = "/.well-known/oauth-authorization-server"
-	oidcWellKnownMetadataPath                     = "/.well-known/openid-configuration"
+	// The extension server matches the generated rules against these same paths to decide which
+	// ones must stay publicly reachable, so both sides share one definition.
+	oauthWellKnownProtectedResourceMetadataPath   = internalapi.OAuthProtectedResourceMetadataPath
+	oauthWellKnownAuthorizationServerMetadataPath = internalapi.OAuthAuthorizationServerMetadataPath
+	oidcWellKnownMetadataPath                     = internalapi.OIDCConfigurationPath
 
 	oauthProtectedResourceMetadataSuffix = "-oauth-protected-resource-metadata"
 	oauthAuthServerMetadataSuffix        = "-oauth-authorization-server-metadata"
