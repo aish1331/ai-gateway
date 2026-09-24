@@ -87,12 +87,6 @@ func resourceIdentifier(r *http.Request, oauth *filterapi.MCPRouteOAuth, resourc
 	return strings.TrimSuffix(identifier, "/")
 }
 
-// derivesFromRequest reports whether the advertised identifier depends on this request rather
-// than on configuration. It decides whether the response needs a Vary header.
-func derivesFromRequest(oauth *filterapi.MCPRouteOAuth) bool {
-	return oauth == nil || oauth.Resource == ""
-}
-
 // resourceMetadataURL returns the URL of the Protected Resource Metadata document for the MCP
 // endpoint this request was made against, per RFC 9728 section 3.1: the well-known path is
 // inserted between the identifier's authority and its path component.
@@ -195,11 +189,12 @@ func (m *mcpRequestContext) writeProtectedResourceMetadata(w http.ResponseWriter
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	writeProtectedResourceMetadataCORSHeaders(h)
-	if derivesFromRequest(oauth) {
-		// The body depends on these headers, so a shared cache must key on them. Omitted when
-		// resource is pinned: that response is request-independent, exactly as the static
-		// direct response was, and adding the header there would itself be a behaviour change.
-		h.Set("Vary", "Host, X-Forwarded-Proto")
+	if oauth.Resource == "" {
+		// The body depends on the forwarded scheme, so a shared cache must key on it. Host
+		// needs no Vary: it is already part of the effective request URI a cache keys on.
+		// Omitted when resource is pinned: that response is request-independent, exactly as
+		// the static direct response was, and the header would itself be a behaviour change.
+		h.Set("Vary", "X-Forwarded-Proto")
 	}
 	w.WriteHeader(http.StatusOK)
 	if _, err = w.Write(body); err != nil {

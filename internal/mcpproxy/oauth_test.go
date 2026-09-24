@@ -413,7 +413,9 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	t.Run("Vary is set only when the identifier is derived", func(t *testing.T) {
 		derived := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
 		w := get(derived, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
-		require.Equal(t, "Host, X-Forwarded-Proto", w.Header().Get("Vary"))
+		// Host is already part of the effective request URI a cache keys on, so only the
+		// forwarded scheme needs to be named here.
+		require.Equal(t, "X-Forwarded-Proto", w.Header().Get("Vary"))
 
 		pinned := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{
 			Issuer:   "https://auth.example.com",
