@@ -594,6 +594,12 @@ type ProtectedResourceMetadata struct {
 	// Leave it unset unless the gateway is fronted by something that rewrites the
 	// externally visible URL in a way the forwarded headers do not reflect.
 	//
+	// When Audiences is set, note that clients following RFC 8707 send the advertised
+	// identifier as the "resource" parameter when requesting a token, and the authorization
+	// server binds the token's "aud" to it. A derived identifier therefore has to agree with
+	// the statically configured Audiences, so list every address the route is reachable on,
+	// or set Resource explicitly. With Audiences empty there is nothing to disagree with.
+	//
 	// +kubebuilder:validation:Format=uri
 	// +optional
 	Resource string `json:"resource,omitempty"`

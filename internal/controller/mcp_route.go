@@ -30,8 +30,16 @@ import (
 )
 
 const (
+	// mcpProxyBackendDummyIP is the placeholder address of the generated MCP proxy Backend.
+	//
+	// A Backend can only point at a real address, so there is no way to say "forward to a port
+	// in my own pod". It names an address from the RFC 5737 TEST-NET-1 documentation range
+	// instead, which routes nowhere. Envoy Gateway turns it into a cluster and the extension
+	// server rewrites that cluster to reach the in-process proxy on localhost. A cluster that
+	// escapes the rewrite would hang until the request timed out; see
+	// clusterTargetsMCPProxyBackend in internal/extensionserver.
+	mcpProxyBackendDummyIP = "192.0.2.42"
 	defaultMCPPath         = "/mcp"
-	mcpProxyBackendDummyIP = "192.0.2.42" // RFC 5737 TEST-NET-2, used as a dummy IP.
 )
 
 // MCPRouteController implements [reconcile.TypedReconciler].
