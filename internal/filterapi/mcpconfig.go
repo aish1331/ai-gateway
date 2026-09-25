@@ -45,10 +45,10 @@ type MCPRoute struct {
 	// Authorization is the authorization configuration for this route.
 	Authorization *MCPRouteAuthorization `json:"authorization,omitempty"`
 
-	// OAuth is the OAuth protected resource metadata (RFC 9728) served for this route.
-	// When set, the MCP proxy serves the protected resource metadata document and includes
-	// a resource_metadata challenge in WWW-Authenticate headers it emits.
-	OAuth *MCPRouteOAuth `json:"oauth,omitempty"`
+	// ProtectedResourceMetadata is the OAuth protected resource metadata (RFC 9728) served for
+	// this route. When set, the MCP proxy serves the protected resource metadata document and
+	// includes a resource_metadata challenge in WWW-Authenticate headers it emits.
+	ProtectedResourceMetadata *MCPRouteOAuthProtectedResourceMetadata `json:"protectedResourceMetadata,omitempty"`
 
 	// BackendSelector restricts which of this route's backends a request may fan out to.
 	// It reuses the same MCPRouteAuthorization shape and CEL engine as Authorization above,
@@ -167,7 +167,10 @@ type MCPRouteAuthorization struct {
 	Rules []MCPRouteAuthorizationRule `json:"rules,omitempty"`
 }
 
-// MCPRouteOAuth is the OAuth protected resource metadata the gateway advertises for a route.
+// MCPRouteOAuthProtectedResourceMetadata is the OAuth protected resource metadata the gateway
+// advertises for a route. Every field here corresponds to a member of the document the MCP
+// proxy serves; the remaining OAuth settings on the MCPRoute API (audiences, JWKS, claim to
+// header projection) are realized as Envoy policy and never reach this config.
 //
 // The resource identifier itself is deliberately not part of this configuration unless the
 // operator overrides it: it is computed per request from the scheme, authority and path the
@@ -175,7 +178,7 @@ type MCPRouteAuthorization struct {
 // TLS termination point. See RFC 9728 and the MCP authorization spec:
 // * https://datatracker.ietf.org/doc/html/rfc9728#name-protected-resource-metadata
 // * https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization
-type MCPRouteOAuth struct {
+type MCPRouteOAuthProtectedResourceMetadata struct {
 	// Issuer is the OAuth authorization server issuer URL. It is advertised as the single
 	// entry of the metadata document's authorization_servers.
 	Issuer string `json:"issuer"`

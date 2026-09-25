@@ -76,12 +76,12 @@ func externalPath(r *http.Request) string {
 //
 // A configured override always wins, so an operator fronted by something that rewrites the
 // externally visible URL without forwarding headers can still pin the value.
-func resourceIdentifier(r *http.Request, oauth *filterapi.MCPRouteOAuth, resourcePath string) string {
-	if oauth != nil && oauth.Resource != "" {
+func resourceIdentifier(r *http.Request, prm *filterapi.MCPRouteOAuthProtectedResourceMetadata, resourcePath string) string {
+	if prm != nil && prm.Resource != "" {
 		// Emitted exactly as configured, including any trailing slash. The static direct
 		// response this replaced did the same, so a route that pins resource sees a
 		// byte-identical document before and after this change.
-		return oauth.Resource
+		return prm.Resource
 	}
 	identifier := externalScheme(r) + "://" + r.Host + resourcePath
 	return strings.TrimSuffix(identifier, "/")
@@ -90,11 +90,11 @@ func resourceIdentifier(r *http.Request, oauth *filterapi.MCPRouteOAuth, resourc
 // resourceMetadataURL returns the URL of the Protected Resource Metadata document for the MCP
 // endpoint this request was made against, per RFC 9728 section 3.1: the well-known path is
 // inserted between the identifier's authority and its path component.
-func resourceMetadataURL(r *http.Request, oauth *filterapi.MCPRouteOAuth, resourcePath string) string {
+func resourceMetadataURL(r *http.Request, prm *filterapi.MCPRouteOAuthProtectedResourceMetadata, resourcePath string) string {
 	// buildResourceMetadataURL has always trimmed a trailing slash before splicing in the
 	// well-known path, so the challenge URL keeps that normalization even though the document
 	// reproduces the configured value verbatim.
-	identifier := strings.TrimSuffix(resourceIdentifier(r, oauth, resourcePath), "/")
+	identifier := strings.TrimSuffix(resourceIdentifier(r, prm, resourcePath), "/")
 
 	prefixLen := 0
 	switch {
@@ -124,13 +124,13 @@ func (m *mcpRequestContext) serveOAuthProtectedResourceMetadata(w http.ResponseW
 	// on path alone, so Envoy answered every method with the document. Rejecting anything here
 	// would be a change in client-visible behaviour.
 	routeName := r.Header.Get(internalapi.MCPRouteHeader)
-	var oauth *filterapi.MCPRouteOAuth
+	var prm *filterapi.MCPRouteOAuthProtectedResourceMetadata
 	if m.mcpProxyConfig != nil {
 		if route := m.routes[routeName]; route != nil {
-			oauth = route.oauth
+			prm = route.prm
 		}
 	}
-	if oauth == nil {
+	if prm == nil {
 		// Either the route is unknown to this proxy instance, or it does not configure OAuth.
 		// Both mean there is no metadata document to serve for it.
 		m.l.Debug("no OAuth configuration for MCP route, not serving protected resource metadata",
@@ -139,7 +139,7 @@ func (m *mcpRequestContext) serveOAuthProtectedResourceMetadata(w http.ResponseW
 		return
 	}
 
-	m.writeProtectedResourceMetadata(w, r, oauth)
+	m.writeProtectedResourceMetadata(w, r, prm)
 }
 
 // writeProtectedResourceMetadataCORSHeaders reproduces exactly the headers ensureCORSHeaders
@@ -153,30 +153,30 @@ func writeProtectedResourceMetadataCORSHeaders(h http.Header) {
 
 // writeProtectedResourceMetadata writes the RFC 9728 Protected Resource Metadata document for
 // the route, with the resource identifier derived from this very request.
-func (m *mcpRequestContext) writeProtectedResourceMetadata(w http.ResponseWriter, r *http.Request, oauth *filterapi.MCPRouteOAuth) {
+func (m *mcpRequestContext) writeProtectedResourceMetadata(w http.ResponseWriter, r *http.Request, prm *filterapi.MCPRouteOAuthProtectedResourceMetadata) {
 	// The MCP endpoint path is the request path with the well-known prefix removed. For an
 	// MCPRoute serving "/mcp" the request arrives at "/.well-known/oauth-protected-resource/mcp".
 	resourcePath := strings.TrimPrefix(externalPath(r), oauthProtectedResourceMetadataPath)
 
 	doc := map[string]any{
-		"resource":                 resourceIdentifier(r, oauth, resourcePath),
-		"authorization_servers":    []string{oauth.Issuer},
+		"resource":                 resourceIdentifier(r, prm, resourcePath),
+		"authorization_servers":    []string{prm.Issuer},
 		"bearer_methods_supported": []string{"header"},
 	}
-	if oauth.ResourceName != "" {
-		doc["resource_name"] = oauth.ResourceName
+	if prm.ResourceName != "" {
+		doc["resource_name"] = prm.ResourceName
 	}
-	if len(oauth.ScopesSupported) > 0 {
-		doc["scopes_supported"] = oauth.ScopesSupported
+	if len(prm.ScopesSupported) > 0 {
+		doc["scopes_supported"] = prm.ScopesSupported
 	}
-	if len(oauth.ResourceSigningAlgValuesSupported) > 0 {
-		doc["resource_signing_alg_values_supported"] = oauth.ResourceSigningAlgValuesSupported
+	if len(prm.ResourceSigningAlgValuesSupported) > 0 {
+		doc["resource_signing_alg_values_supported"] = prm.ResourceSigningAlgValuesSupported
 	}
-	if oauth.ResourceDocumentation != "" {
-		doc["resource_documentation"] = oauth.ResourceDocumentation
+	if prm.ResourceDocumentation != "" {
+		doc["resource_documentation"] = prm.ResourceDocumentation
 	}
-	if oauth.ResourcePolicyURI != "" {
-		doc["resource_policy_uri"] = oauth.ResourcePolicyURI
+	if prm.ResourcePolicyURI != "" {
+		doc["resource_policy_uri"] = prm.ResourcePolicyURI
 	}
 
 	body, err := json.Marshal(doc)
@@ -189,7 +189,7 @@ func (m *mcpRequestContext) writeProtectedResourceMetadata(w http.ResponseWriter
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	writeProtectedResourceMetadataCORSHeaders(h)
-	if oauth.Resource == "" {
+	if prm.Resource == "" {
 		// The body depends on the forwarded scheme, so a shared cache must key on it. Host
 		// needs no Vary: it is already part of the effective request URI a cache keys on.
 		// Omitted when resource is pinned: that response is request-independent, exactly as

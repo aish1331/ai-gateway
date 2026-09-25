@@ -654,7 +654,7 @@ func mcpConfig(mcpRoutes []aigv1b1.MCPRoute) (_ *filterapi.MCPConfig, hasEffecti
 		// authorization rules below: the MCP proxy serves the metadata document, and advertises
 		// it in WWW-Authenticate challenges, whenever OAuth is configured at all.
 		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.OAuth != nil {
-			mcpRoute.OAuth = mcpRouteOAuth(route.Spec.SecurityPolicy.OAuth)
+			mcpRoute.ProtectedResourceMetadata = mcpRouteOAuth(route.Spec.SecurityPolicy.OAuth)
 		}
 		// Add authorization configuration for the route.
 		if route.Spec.SecurityPolicy != nil && route.Spec.SecurityPolicy.Authorization != nil {

@@ -360,9 +360,11 @@ func buildResourceMetadataURL(resource string) string {
 // * https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization#protected-resource-metadata-discovery-requirements
 // * https://datatracker.ietf.org/doc/html/rfc9728#name-www-authenticate-response
 func buildWWWAuthenticateHeaderValue(metadata *aigv1b1.ProtectedResourceMetadata, servingPath string) string {
-	resourceMetadataURL := envoyDerivedResourceMetadataURL(servingPath)
+	var resourceMetadataURL string
 	if metadata.Resource != "" {
 		resourceMetadataURL = buildResourceMetadataURL(metadata.Resource)
+	} else {
+		resourceMetadataURL = envoyDerivedResourceMetadataURL(servingPath)
 	}
 	headerValue := `Bearer error="invalid_token", error_description="The access token is missing or invalid"`
 
@@ -379,9 +381,9 @@ func buildWWWAuthenticateHeaderValue(metadata *aigv1b1.ProtectedResourceMetadata
 
 // mcpRouteOAuth converts the MCPRoute OAuth configuration into the filter config the MCP proxy
 // consumes to serve the Protected Resource Metadata document.
-func mcpRouteOAuth(auth *aigv1b1.MCPRouteOAuth) *filterapi.MCPRouteOAuth {
+func mcpRouteOAuth(auth *aigv1b1.MCPRouteOAuth) *filterapi.MCPRouteOAuthProtectedResourceMetadata {
 	metadata := &auth.ProtectedResourceMetadata
-	return &filterapi.MCPRouteOAuth{
+	return &filterapi.MCPRouteOAuthProtectedResourceMetadata{
 		Issuer:                            auth.Issuer,
 		Resource:                          metadata.Resource,
 		ResourceName:                      ptr.Deref(metadata.ResourceName, ""),

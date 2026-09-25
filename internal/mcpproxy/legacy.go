@@ -706,8 +706,8 @@ func (m *mcpRequestContext) handleToolCallRequest(ctx context.Context, s *sessio
 				// The resource_metadata URL is derived from this request so that it points at
 				// the host the client actually reached, whatever hostname or port that is.
 				var metadataURL string
-				if route.oauth != nil {
-					metadataURL = resourceMetadataURL(r, route.oauth, externalPath(r))
+				if route.prm != nil {
+					metadataURL = resourceMetadataURL(r, route.prm, externalPath(r))
 				}
 				if challenge := buildInsufficientScopeHeader(requiredScopes, metadataURL); challenge != "" {
 					w.Header().Set("WWW-Authenticate", challenge)

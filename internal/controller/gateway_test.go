@@ -3463,16 +3463,16 @@ func Test_mcpConfig_OAuth(t *testing.T) {
 			},
 		}))
 		require.True(t, effective)
-		require.Equal(t, &filterapi.MCPRouteOAuth{
+		require.Equal(t, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
 			Issuer:                            "https://auth.example.com",
 			ResourceName:                      "My MCP Tools",
 			ScopesSupported:                   []string{"read", "write"},
 			ResourceSigningAlgValuesSupported: []string{"RS256"},
 			ResourceDocumentation:             "https://docs.example.com",
 			ResourcePolicyURI:                 "https://policy.example.com",
-		}, mc.Routes[0].OAuth)
+		}, mc.Routes[0].ProtectedResourceMetadata)
 		// Resource is left empty so the proxy derives it per request.
-		require.Empty(t, mc.Routes[0].OAuth.Resource)
+		require.Empty(t, mc.Routes[0].ProtectedResourceMetadata.Resource)
 	})
 
 	t.Run("an explicitly configured resource is carried through as an override", func(t *testing.T) {
@@ -3484,7 +3484,7 @@ func Test_mcpConfig_OAuth(t *testing.T) {
 				},
 			},
 		}))
-		require.Equal(t, "https://api.example.com/mcp", mc.Routes[0].OAuth.Resource)
+		require.Equal(t, "https://api.example.com/mcp", mc.Routes[0].ProtectedResourceMetadata.Resource)
 	})
 
 	t.Run("OAuth without authorization rules still serves metadata", func(t *testing.T) {
@@ -3494,13 +3494,13 @@ func Test_mcpConfig_OAuth(t *testing.T) {
 			OAuth: &aigv1b1.MCPRouteOAuth{Issuer: "https://auth.example.com"},
 		}))
 		require.Nil(t, mc.Routes[0].Authorization)
-		require.NotNil(t, mc.Routes[0].OAuth)
-		require.Equal(t, "https://auth.example.com", mc.Routes[0].OAuth.Issuer)
+		require.NotNil(t, mc.Routes[0].ProtectedResourceMetadata)
+		require.Equal(t, "https://auth.example.com", mc.Routes[0].ProtectedResourceMetadata.Issuer)
 	})
 
 	t.Run("no OAuth configured", func(t *testing.T) {
 		mc, _ := mcpConfig(newRoute(nil))
-		require.Nil(t, mc.Routes[0].OAuth)
+		require.Nil(t, mc.Routes[0].ProtectedResourceMetadata)
 	})
 }
 

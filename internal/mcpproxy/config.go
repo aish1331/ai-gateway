@@ -48,10 +48,10 @@ type (
 		// above, but is evaluated once per candidate backend in newSession() instead of
 		// per JSON-RPC method call.
 		backendSelector *compiledAuthorization
-		// oauth is the OAuth protected resource metadata served for this route, if any.
+		// prm is the OAuth protected resource metadata served for this route, if any.
 		// The resource identifier is derived per request rather than stored here; see
 		// resourceIdentifier in oauth.go.
-		oauth          *filterapi.MCPRouteOAuth
+		prm            *filterapi.MCPRouteOAuthProtectedResourceMetadata
 		forwardHeaders []string
 		// routePrefixMode is the route-level fallback when a backend has no per-backend PrefixMode set.
 		routePrefixMode filterapi.PrefixMode
@@ -287,7 +287,7 @@ func (p *ProxyConfig) LoadConfig(_ context.Context, config *filterapi.Config) er
 			promptSelectors: make(map[filterapi.MCPBackendName]*toolSelector, len(route.Backends)),
 			authorization:   compiledAuth,
 			backendSelector: compiledBackendSel,
-			oauth:           route.OAuth,
+			prm:             route.ProtectedResourceMetadata,
 			forwardHeaders:  route.ForwardHeaders,
 			routePrefixMode: route.PrefixMode,
 		}

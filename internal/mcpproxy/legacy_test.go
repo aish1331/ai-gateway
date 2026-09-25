@@ -728,11 +728,11 @@ func TestHandleToolCallRequest_InsufficientScope(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	newDeniedCall := func(oauth *filterapi.MCPRouteOAuth) (*httptest.ResponseRecorder, error) {
+	newDeniedCall := func(prm *filterapi.MCPRouteOAuthProtectedResourceMetadata) (*httptest.ResponseRecorder, error) {
 		proxy := newTestMCPProxy()
 		route := proxy.routes["test-route"]
 		route.authorization = auth
-		route.oauth = oauth
+		route.prm = prm
 		s := &session{
 			reqCtx: proxy,
 			perBackendSessions: map[filterapi.MCPBackendName]*compositeSessionEntry{
@@ -751,7 +751,7 @@ func TestHandleToolCallRequest_InsufficientScope(t *testing.T) {
 	}
 
 	t.Run("derived resource metadata is included when OAuth is configured", func(t *testing.T) {
-		rr, err := newDeniedCall(&filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		rr, err := newDeniedCall(&filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
 		require.ErrorContains(t, err, "authorization failed")
 		require.Equal(t, http.StatusForbidden, rr.Code)
 		require.Equal(t,

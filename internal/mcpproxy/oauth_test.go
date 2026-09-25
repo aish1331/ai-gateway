@@ -104,7 +104,7 @@ func TestResourceIdentifier(t *testing.T) {
 		host         string
 		proto        string
 		resourcePath string
-		oauth        *filterapi.MCPRouteOAuth
+		prm          *filterapi.MCPRouteOAuthProtectedResourceMetadata
 		want         string
 	}{
 		{
@@ -151,7 +151,7 @@ func TestResourceIdentifier(t *testing.T) {
 			host:         "internal.svc.cluster.local:9856",
 			proto:        "http",
 			resourcePath: "/mcp",
-			oauth:        &filterapi.MCPRouteOAuth{Resource: "https://api.example.com/mcp"},
+			prm:          &filterapi.MCPRouteOAuthProtectedResourceMetadata{Resource: "https://api.example.com/mcp"},
 			want:         "https://api.example.com/mcp",
 		},
 		{
@@ -161,16 +161,16 @@ func TestResourceIdentifier(t *testing.T) {
 			host:         "api.example.com",
 			proto:        "https",
 			resourcePath: "/mcp",
-			oauth:        &filterapi.MCPRouteOAuth{Resource: "https://api.example.com/mcp/"},
+			prm:          &filterapi.MCPRouteOAuthProtectedResourceMetadata{Resource: "https://api.example.com/mcp/"},
 			want:         "https://api.example.com/mcp/",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			oauth := tc.oauth
-			if oauth == nil {
-				oauth = &filterapi.MCPRouteOAuth{}
+			prm := tc.prm
+			if prm == nil {
+				prm = &filterapi.MCPRouteOAuthProtectedResourceMetadata{}
 			}
-			require.Equal(t, tc.want, resourceIdentifier(newRequest(tc.host, tc.proto), oauth, tc.resourcePath))
+			require.Equal(t, tc.want, resourceIdentifier(newRequest(tc.host, tc.proto), prm, tc.resourcePath))
 		})
 	}
 }
@@ -181,7 +181,7 @@ func TestResourceMetadataURL(t *testing.T) {
 		host         string
 		proto        string
 		resourcePath string
-		oauth        *filterapi.MCPRouteOAuth
+		prm          *filterapi.MCPRouteOAuthProtectedResourceMetadata
 		want         string
 	}{
 		{
@@ -210,7 +210,7 @@ func TestResourceMetadataURL(t *testing.T) {
 			host:         "internal:9856",
 			proto:        "http",
 			resourcePath: "/mcp",
-			oauth:        &filterapi.MCPRouteOAuth{Resource: "https://api.example.com/mcp/v1"},
+			prm:          &filterapi.MCPRouteOAuthProtectedResourceMetadata{Resource: "https://api.example.com/mcp/v1"},
 			want:         "https://api.example.com/.well-known/oauth-protected-resource/mcp/v1",
 		},
 		{
@@ -218,7 +218,7 @@ func TestResourceMetadataURL(t *testing.T) {
 			host:         "internal:9856",
 			proto:        "http",
 			resourcePath: "/mcp",
-			oauth:        &filterapi.MCPRouteOAuth{Resource: "https://api.example.com"},
+			prm:          &filterapi.MCPRouteOAuthProtectedResourceMetadata{Resource: "https://api.example.com"},
 			want:         "https://api.example.com/.well-known/oauth-protected-resource",
 		},
 	} {
@@ -226,18 +226,18 @@ func TestResourceMetadataURL(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "http://placeholder/", nil)
 			r.Host = tc.host
 			r.Header.Set("x-forwarded-proto", tc.proto)
-			oauth := tc.oauth
-			if oauth == nil {
-				oauth = &filterapi.MCPRouteOAuth{}
+			prm := tc.prm
+			if prm == nil {
+				prm = &filterapi.MCPRouteOAuthProtectedResourceMetadata{}
 			}
-			require.Equal(t, tc.want, resourceMetadataURL(r, oauth, tc.resourcePath))
+			require.Equal(t, tc.want, resourceMetadataURL(r, prm, tc.resourcePath))
 		})
 	}
 }
 
 // newOAuthTestProxy returns a mux serving a single route named routeName with the given OAuth
 // configuration, exercising the same LoadConfig path the real filter config takes.
-func newOAuthTestProxy(t *testing.T, routeName string, oauth *filterapi.MCPRouteOAuth) http.Handler {
+func newOAuthTestProxy(t *testing.T, routeName string, prm *filterapi.MCPRouteOAuthProtectedResourceMetadata) http.Handler {
 	t.Helper()
 	proxy, mux, err := NewMCPProxy(slog.Default(), stubMetrics{}, noopTracer, NewPBKDF2AesGcmSessionCrypto("test", 100), nil)
 	require.NoError(t, err)
@@ -245,9 +245,9 @@ func newOAuthTestProxy(t *testing.T, routeName string, oauth *filterapi.MCPRoute
 		MCPConfig: &filterapi.MCPConfig{
 			BackendListenerAddr: "http://127.0.0.1:10088",
 			Routes: []filterapi.MCPRoute{{
-				Name:     routeName,
-				Backends: []filterapi.MCPBackend{{Name: "backend1"}},
-				OAuth:    oauth,
+				Name:                      routeName,
+				Backends:                  []filterapi.MCPBackend{{Name: "backend1"}},
+				ProtectedResourceMetadata: prm,
 			}},
 		},
 	}))
@@ -270,7 +270,7 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	}
 
 	t.Run("derives the resource from the request", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
 			Issuer:          "https://auth.example.com",
 			ResourceName:    "My MCP Tools",
 			ScopesSupported: []string{"read", "write"},
@@ -291,7 +291,7 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	})
 
 	t.Run("the same config serves a different host correctly", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
 
 		for _, tc := range []struct{ host, proto, want string }{
 			{"api.example.com", "https", "https://api.example.com/mcp"},
@@ -307,7 +307,7 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	})
 
 	t.Run("an explicitly configured resource still wins", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
 			Issuer:   "https://auth.example.com",
 			Resource: "https://canonical.example.com/mcp",
 		})
@@ -322,7 +322,7 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	// route that pins resource must see a byte-identical document. The challenge URL keeps
 	// normalizing the trailing slash, as buildResourceMetadataURL always did.
 	t.Run("a configured trailing slash is preserved in the document", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
 			Issuer:   "https://auth.example.com",
 			Resource: "https://canonical.example.com/mcp/",
 		})
@@ -337,11 +337,11 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 		r.Header.Set("x-forwarded-proto", "https")
 		require.Equal(t,
 			"https://canonical.example.com/.well-known/oauth-protected-resource/mcp",
-			resourceMetadataURL(r, &filterapi.MCPRouteOAuth{Resource: "https://canonical.example.com/mcp/"}, "/mcp"))
+			resourceMetadataURL(r, &filterapi.MCPRouteOAuthProtectedResourceMetadata{Resource: "https://canonical.example.com/mcp/"}, "/mcp"))
 	})
 
 	t.Run("optional fields are omitted when unset", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
 		w := get(h, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
 		var doc map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &doc))
@@ -353,7 +353,7 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	})
 
 	t.Run("all optional fields are propagated", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
 			Issuer:                            "https://auth.example.com",
 			ResourceName:                      "name",
 			ScopesSupported:                   []string{"read"},
@@ -371,7 +371,7 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	})
 
 	t.Run("unknown route is not found", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
 		w := get(h, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", "default/other-route")
 		require.Equal(t, http.StatusNotFound, w.Code)
 	})
@@ -385,7 +385,7 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	// ensureCORSHeaders put exactly these on the direct response. A browser MCP client sends
 	// mcp-protocol-version, so narrowing Allow-Headers would break it.
 	t.Run("CORS headers match the previous direct response", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
 		w := get(h, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
 		require.Equal(t, "*", w.Header().Get("Access-Control-Allow-Origin"))
 		require.Equal(t, "GET", w.Header().Get("Access-Control-Allow-Methods"))
@@ -395,7 +395,7 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	// The rule this replaced matched on path alone, so Envoy answered every method with the
 	// document. Gating on method here would be a client-visible change.
 	t.Run("every method is answered, as a direct response was", func(t *testing.T) {
-		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		h := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
 		for _, method := range []string{http.MethodGet, http.MethodOptions, http.MethodPost, http.MethodDelete, http.MethodHead} {
 			r := httptest.NewRequest(method, "http://placeholder/.well-known/oauth-protected-resource/mcp", nil)
 			r.Host = "api.example.com"
@@ -411,13 +411,13 @@ func TestServeOAuthProtectedResourceMetadata(t *testing.T) {
 	// A pinned resource makes the response request-independent, exactly as the static one was,
 	// so it must not acquire a Vary header. A derived one must.
 	t.Run("Vary is set only when the identifier is derived", func(t *testing.T) {
-		derived := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		derived := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
 		w := get(derived, "api.example.com", "https", "/.well-known/oauth-protected-resource/mcp", routeName)
 		// Host is already part of the effective request URI a cache keys on, so only the
 		// forwarded scheme needs to be named here.
 		require.Equal(t, "X-Forwarded-Proto", w.Header().Get("Vary"))
 
-		pinned := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuth{
+		pinned := newOAuthTestProxy(t, routeName, &filterapi.MCPRouteOAuthProtectedResourceMetadata{
 			Issuer:   "https://auth.example.com",
 			Resource: "https://api.example.com/mcp",
 		})
@@ -440,6 +440,6 @@ func TestWriteProtectedResourceMetadata_WriteError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// A failed write is logged and otherwise ignored; the handler must not panic.
 	proxy.writeProtectedResourceMetadata(errResponseWriter{ResponseWriter: rec, err: io.ErrClosedPipe}, r,
-		&filterapi.MCPRouteOAuth{Issuer: "https://auth.example.com"})
+		&filterapi.MCPRouteOAuthProtectedResourceMetadata{Issuer: "https://auth.example.com"})
 	require.Equal(t, http.StatusOK, rec.Code)
 }
