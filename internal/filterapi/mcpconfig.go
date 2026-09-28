@@ -165,6 +165,15 @@ type MCPRouteAuthorization struct {
 	// Requests that do not match any rule or fail to satisfy the matched rule's conditions will be denied.
 	// If no rules are defined, all requests will be denied.
 	Rules []MCPRouteAuthorizationRule `json:"rules,omitempty"`
+
+	// VerifiedJWT reports whether Envoy has been configured to cryptographically verify the
+	// bearer JWT's signature, issuer, and audience before a request reaches the MCP proxy
+	// (i.e. the owning MCPRoute has securityPolicy.oauth configured). JWT claims and scopes
+	// (whether via Source.JWT or a CEL expression referencing request.auth.jwt.*) must only be
+	// trusted for authorization decisions when this is true: without Envoy-side verification, a
+	// caller can present a structurally valid but unsigned/forged token, and the proxy has no
+	// way to distinguish it from a genuine one.
+	VerifiedJWT bool `json:"verifiedJWT,omitempty"`
 }
 
 // MCPRouteOAuthProtectedResourceMetadata is the OAuth protected resource metadata the gateway
