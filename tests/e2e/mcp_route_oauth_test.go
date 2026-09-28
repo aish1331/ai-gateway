@@ -211,12 +211,7 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, "Bearer", "WWW-Authenticate header should contain Bearer scheme")
 
 		// Validate WWW-Authenticate header contains resource_metadata parameter.
-		// The identifier is derived from the request, so it names the port-forward address the
-		// client actually used rather than a statically configured hostname. On the 401 path the
-		// substitution is performed by Envoy, since the JWT filter rejects the request before it
-		// ever reaches the MCP proxy.
-		require.Contains(t, wwwAuthHeader,
-			fmt.Sprintf(`resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, fwd.Address()),
+		require.Contains(t, wwwAuthHeader, `resource_metadata="https://foo.bar.com/.well-known/oauth-protected-resource/mcp"`,
 			"WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 
@@ -225,13 +220,89 @@ func TestMCPRouteOAuth(t *testing.T) {
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 	})
 
-	// Both places the gateway advertises the resource identifier interpolate the request
+	// mcp-route-oauth-derived omits protectedResourceMetadata.resource, so the identifier names
+	// the address this test actually reached: a port-forward on a port picked at run time, which
+	// no statically configured value could ever have matched. The 401 challenge is the only
+	// surface where Envoy performs the substitution, since its JWT filter rejects the request
+	// before the MCP proxy sees it, so this is the only place that expansion is proven to work.
+	t.Run("resource identifier derived from the request", func(t *testing.T) {
+		t.Run("metadata document", func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), "GET",
+				fmt.Sprintf("%s/.well-known/oauth-protected-resource/mcp-derived", fwd.Address()), nil)
+			require.NoError(t, err)
+
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+
+			var metadata map[string]interface{}
+			require.NoError(t, json.Unmarshal(body, &metadata))
+			require.Equal(t, fwd.Address()+"/mcp-derived", metadata["resource"],
+				"Resource should be derived from the request")
+			require.Equal(t, "example-resource-derived", metadata["resource_name"])
+
+			// The body depends on the forwarded scheme, so a shared cache must key on it.
+			require.Equal(t, "X-Forwarded-Proto", resp.Header.Get("Vary"))
+			requireMetadataCORSHeaders(t, resp)
+		})
+
+		// One MCPRoute must advertise the correct identifier on every address it is reachable
+		// on. That rests on Envoy forwarding the downstream authority to the MCP proxy
+		// unchanged, which only an end-to-end request can show: a host rewrite on the
+		// generated Backend route would silently pin every response to one authority, and the
+		// unit tests drive the proxy directly so they would not notice.
+		for _, host := range []string{"api.example.com", "tenant-b.example.com:8443"} {
+			t.Run("identifier tracks the request authority "+host, func(t *testing.T) {
+				req, err := http.NewRequestWithContext(t.Context(), "GET",
+					fmt.Sprintf("%s/.well-known/oauth-protected-resource/mcp-derived", fwd.Address()), nil)
+				require.NoError(t, err)
+				req.Host = host
+
+				resp, err := httpClient.Do(req)
+				require.NoError(t, err)
+				defer resp.Body.Close()
+
+				require.Equal(t, http.StatusOK, resp.StatusCode)
+				body, err := io.ReadAll(resp.Body)
+				require.NoError(t, err)
+
+				var metadata map[string]interface{}
+				require.NoError(t, json.Unmarshal(body, &metadata))
+				// The port-forward speaks plain HTTP, so Envoy sets x-forwarded-proto: http.
+				require.Equal(t, "http://"+host+"/mcp-derived", metadata["resource"],
+					"Resource should name the authority this request used")
+			})
+		}
+
+		t.Run("401 challenge", func(t *testing.T) {
+			req, err := http.NewRequestWithContext(t.Context(), "GET", fmt.Sprintf("%s/mcp-derived", fwd.Address()), nil)
+			require.NoError(t, err)
+
+			resp, err := httpClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+			wwwAuthHeader := resp.Header.Get("WWW-Authenticate")
+			require.Contains(t, wwwAuthHeader,
+				fmt.Sprintf(`resource_metadata="%s/.well-known/oauth-protected-resource/mcp-derived"`, fwd.Address()),
+				"Envoy should expand the substitution format string into the request authority")
+			t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
+		})
+	})
+
+	// Both places the gateway advertises a derived resource identifier interpolate the request
 	// authority: the 401 challenge via an Envoy substitution format string, and the metadata
 	// document via the MCP proxy. Neither escapes, so both rest on Envoy rejecting an authority
 	// that could break out of the surrounding syntax. Pin that assumption rather than trust it:
 	// if it ever stops holding, a client-supplied Host could inject an auth-param into the
 	// challenge, or a JSON key such as authorization_servers into the document, which would
-	// point clients at an attacker-chosen authorization server.
+	// point clients at an attacker-chosen authorization server. Only the derived route is worth
+	// probing; a pinned resource never interpolates the authority in the first place.
 	t.Run("a Host that could break out of the advertised syntax is rejected", func(t *testing.T) {
 		// A quote is the character that matters: it terminates the quoted auth-param in
 		// WWW-Authenticate and the JSON string literal in the metadata document.
@@ -241,8 +312,8 @@ func TestMCPRouteOAuth(t *testing.T) {
 			name string
 			path string
 		}{
-			{"metadata document", "/.well-known/oauth-protected-resource/mcp"},
-			{"401 challenge", "/mcp"},
+			{"metadata document", "/.well-known/oauth-protected-resource/mcp-derived"},
+			{"401 challenge", "/mcp-derived"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				status, raw := rawRequestWithHost(t, fwd.Address(), tc.path, craftedHost)
@@ -297,10 +368,13 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, metadata, "bearer_methods_supported", "Metadata should contain bearer_methods_supported field")
 		require.Contains(t, metadata, "scopes_supported", "Metadata should contain scopes_supported field")
 
-		// Validate field values match expected configuration. resource is omitted from the
-		// MCPRoute, so it must name the address this request was made against.
-		require.Equal(t, fwd.Address()+"/mcp", metadata["resource"],
-			"Resource should be derived from the request")
+		// Validate field values match expected configuration.
+		require.Equal(t, "https://foo.bar.com/mcp", metadata["resource"], "Resource should match configured value")
+
+		// A pinned resource makes the response request-independent, exactly as the static
+		// direct response this replaced was, so it must not acquire a Vary header.
+		require.Empty(t, resp.Header.Get("Vary"))
+		requireMetadataCORSHeaders(t, resp)
 
 		authServers, ok := metadata["authorization_servers"].([]interface{})
 		require.True(t, ok, "authorization_servers should be an array")
@@ -317,6 +391,24 @@ func TestMCPRouteOAuth(t *testing.T) {
 		for _, expectedScope := range expectedScopes {
 			require.Contains(t, scopes, expectedScope, "Should contain expected scope: %s", expectedScope)
 		}
+
+		// The configured value wins over anything derivable from the request, which is the
+		// whole point of pinning it: a deployment fronted by something that rewrites the
+		// externally visible URL keeps advertising the identifier the operator chose.
+		req, err = http.NewRequestWithContext(t.Context(), "GET", metadataURLWithSuffix, nil)
+		require.NoError(t, err)
+		req.Host = "api.example.com"
+
+		resp, err = httpClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		body, err = io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &metadata))
+		require.Equal(t, "https://foo.bar.com/mcp", metadata["resource"],
+			"A pinned resource must not follow the request authority")
 
 		metadataURLWithoutSuffix := fmt.Sprintf("%s/.well-known/oauth-protected-resource", fwd.Address())
 		req, err = http.NewRequestWithContext(t.Context(), "GET", metadataURLWithoutSuffix, nil)
@@ -433,12 +525,7 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, "Bearer", "WWW-Authenticate header should contain Bearer scheme")
 
 		// Validate WWW-Authenticate header contains resource_metadata parameter.
-		// The identifier is derived from the request, so it names the port-forward address the
-		// client actually used rather than a statically configured hostname. On the 401 path the
-		// substitution is performed by Envoy, since the JWT filter rejects the request before it
-		// ever reaches the MCP proxy.
-		require.Contains(t, wwwAuthHeader,
-			fmt.Sprintf(`resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, fwd.Address()),
+		require.Contains(t, wwwAuthHeader, `resource_metadata="https://foo.bar.com/.well-known/oauth-protected-resource/mcp"`,
 			"WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 
@@ -446,6 +533,17 @@ func TestMCPRouteOAuth(t *testing.T) {
 		require.Contains(t, wwwAuthHeader, `scope="echo sum countdown"`, "WWW-Authenticate header should contain resource_metadata parameter")
 		t.Logf("WWW-Authenticate header: %s", wwwAuthHeader)
 	})
+}
+
+// requireMetadataCORSHeaders asserts the CORS headers the MCP proxy puts on the protected
+// resource metadata document. Browser-based MCP clients, the MCP inspector among them, fetch
+// it cross-origin and send mcp-protocol-version, so narrowing these would break them. The
+// HTTPRouteFilter direct response this replaced set exactly these three.
+func requireMetadataCORSHeaders(t *testing.T, resp *http.Response) {
+	t.Helper()
+	require.Equal(t, "*", resp.Header.Get("Access-Control-Allow-Origin"))
+	require.Equal(t, "GET", resp.Header.Get("Access-Control-Allow-Methods"))
+	require.Equal(t, "mcp-protocol-version", resp.Header.Get("Access-Control-Allow-Headers"))
 }
 
 // rawRequestWithHost writes a request over a plain TCP connection so that the Host header is
