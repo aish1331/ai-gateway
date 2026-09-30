@@ -83,7 +83,9 @@ func (b *metricsImpl) SetRequestModel(requestModel internalapi.RequestModel) {
 
 // SetResponseModel is the model that ultimately generated the response. e.g. gpt-5-nano-2025-08-07
 func (b *metricsImpl) SetResponseModel(responseModel internalapi.ResponseModel) {
-	b.responseModel = strings.Clone(responseModel)
+	if responseModel != b.responseModel {
+		b.responseModel = strings.Clone(responseModel)
+	}
 }
 
 // SetBackend sets the name of the backend to be reported in the metrics according to:
