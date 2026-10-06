@@ -79,7 +79,7 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 	input := extProcContainerInput{}
 	baseHash := base.extProcContainerHash(input)
 	require.NotEmpty(t, baseHash)
-	require.Equal(t, 20, reflect.TypeOf(extProcBuilder{}).NumField(),
+	require.Equal(t, 21, reflect.TypeOf(extProcBuilder{}).NumField(),
 		"update drift coverage when extProcBuilder fields change")
 
 	// Helper: mutate a copy of the builder, recompute, expect a different hash.
@@ -157,6 +157,11 @@ func TestExtProcContainerHash_Drift(t *testing.T) {
 		b := newTestBuilder()
 		s := "x-metric-id:metric.id"
 		b.metricsRequestHeaderAttributes = &s
+		return b
+	}())
+	assertDrifts("enabledMetrics", func() *extProcBuilder {
+		b := newTestBuilder()
+		b.enabledMetrics = "gen_ai.client.token.usage"
 		return b
 	}())
 	assertDrifts("logRequestHeaderAttributes", func() *extProcBuilder {
@@ -273,6 +278,19 @@ func TestBuildExtProcBaseArgs_LogFormat(t *testing.T) {
 		b.logFormat = internalapi.LogFormatJSON
 		args := b.buildExtProcBaseArgs(false)
 		require.Equal(t, []string{"-logFormat", internalapi.LogFormatJSON}, args[len(args)-2:])
+	})
+}
+
+func TestBuildExtProcBaseArgs_EnabledMetrics(t *testing.T) {
+	t.Run("not passed when empty", func(t *testing.T) {
+		require.NotContains(t, newTestBuilder().buildExtProcBaseArgs(false), "-enabledMetrics")
+	})
+
+	t.Run("passed when set", func(t *testing.T) {
+		b := newTestBuilder()
+		b.enabledMetrics = "gen_ai.client.token.usage,gen_ai.server.time_to_first_token"
+		args := b.buildExtProcBaseArgs(false)
+		require.Equal(t, []string{"-enabledMetrics", b.enabledMetrics}, args[len(args)-2:])
 	})
 }
 

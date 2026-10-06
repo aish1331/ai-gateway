@@ -207,6 +207,18 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				enableRedaction:  false,
 			},
 			{
+				name: "with enabled metrics",
+				args: []string{
+					"-configBundlePath", "/path/to/config-bundle",
+					"-enabledMetrics", "gen_ai.client.token.usage,gen_ai.server.time_to_first_token",
+				},
+				configBundlePath: "/path/to/config-bundle",
+				rootPrefix:       "/",
+				addr:             ":1063",
+				logLevel:         slog.LevelInfo,
+				enableRedaction:  false,
+			},
+			{
 				name:             "bundle path only",
 				args:             []string{"-configBundlePath", "/path/to/config-bundle"},
 				configBundlePath: "/path/to/config-bundle",
@@ -269,6 +281,11 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				name:          "invalid tracing header attributes - empty header",
 				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-spanRequestHeaderAttributes", ":session.id"},
 				expectedError: "failed to parse tracing header mapping: empty header or attribute at position 1: \":session.id\"",
+			},
+			{
+				name:          "invalid enabled metrics - unknown name",
+				args:          []string{"-configBundlePath", "/path/to/config-bundle", "-enabledMetrics", "gen_ai_client_token_usage"},
+				expectedError: `failed to parse enabled metrics: unknown metric "gen_ai_client_token_usage", must be one of: gen_ai.client.token.usage, gen_ai.server.request.duration, gen_ai.server.time_to_first_token, gen_ai.server.time_per_output_token, mcp.request.duration, mcp.method.count, mcp.initialization.duration, mcp.capabilities.negotiated, mcp.progress.notifications`,
 			},
 		}
 

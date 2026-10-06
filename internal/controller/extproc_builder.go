@@ -64,6 +64,7 @@ func newExtProcBuilder(options *Options, extProcAsSideCar bool, logger logr.Logg
 		requestHeaderAttributes:                options.RequestHeaderAttributes,
 		spanRequestHeaderAttributes:            options.TracingRequestHeaderAttributes,
 		metricsRequestHeaderAttributes:         options.MetricsRequestHeaderAttributes,
+		enabledMetrics:                         options.EnabledMetrics,
 		logRequestHeaderAttributes:             options.LogRequestHeaderAttributes,
 		rootPrefix:                             options.RootPrefix,
 		endpointPrefixes:                       options.EndpointPrefixes,
@@ -92,6 +93,7 @@ type extProcBuilder struct {
 	spanRequestHeaderAttributes    *string
 	metricsRequestHeaderAttributes *string
 	logRequestHeaderAttributes     *string
+	enabledMetrics                 string
 
 	rootPrefix       string
 	endpointPrefixes string
@@ -229,6 +231,8 @@ type extProcConfigDigest struct {
 	MCPFallbackSessionEncryptionIterations int
 	NeedMCP                                bool
 	GatewayConfigExtProc                   *aigv1b1.GatewayConfigExtProc
+	// EnabledMetrics is omitted when empty so deployments that never set it keep the same hash and are not rolled on upgrade.
+	EnabledMetrics string `json:",omitempty"`
 }
 
 // extProcContainerHash returns a stable hash of the extproc injection inputs.
@@ -244,6 +248,7 @@ func (b *extProcBuilder) extProcContainerHash(input extProcContainerInput) strin
 		SpanRequestHeaderAttributes:            b.spanRequestHeaderAttributes,
 		MetricsRequestHeaderAttributes:         b.metricsRequestHeaderAttributes,
 		LogRequestHeaderAttributes:             b.logRequestHeaderAttributes,
+		EnabledMetrics:                         b.enabledMetrics,
 		RootPrefix:                             b.rootPrefix,
 		EndpointPrefixes:                       b.endpointPrefixes,
 		ExtraEnvVars:                           b.extraEnvVars,
@@ -320,6 +325,9 @@ func (b *extProcBuilder) buildExtProcBaseArgs(needMCP bool) []string {
 	}
 	if b.metricsRequestHeaderAttributes != nil {
 		args = append(args, "-metricsRequestHeaderAttributes", *b.metricsRequestHeaderAttributes)
+	}
+	if b.enabledMetrics != "" {
+		args = append(args, "-enabledMetrics", b.enabledMetrics)
 	}
 	if b.logRequestHeaderAttributes != nil {
 		args = append(args, "-logRequestHeaderAttributes", *b.logRequestHeaderAttributes)

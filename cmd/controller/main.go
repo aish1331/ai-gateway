@@ -34,6 +34,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/controller"
 	"github.com/envoyproxy/ai-gateway/internal/extensionserver"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/metrics"
 	"github.com/envoyproxy/ai-gateway/internal/pprof"
 	"github.com/envoyproxy/ai-gateway/internal/ratelimit/runner"
 )
@@ -56,6 +57,7 @@ type flags struct {
 	requestHeaderAttributes        *string
 	spanRequestHeaderAttributes    *string
 	metricsRequestHeaderAttributes *string
+	enabledMetrics                 string
 	logRequestHeaderAttributes     *string
 	endpointPrefixes               string
 	rootPrefix                     string
@@ -222,6 +224,11 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		"Comma-separated key-value pairs for mapping HTTP request headers to Otel metric attributes. Format: x-tenant-id:tenant.id,x-tenant-id:tenant.id.",
 		setOptionalString(&metricsRequestHeaderAttributes),
 	)
+	enabledMetrics := fs.String(
+		"enabledMetrics",
+		"",
+		"Comma-separated OpenTelemetry metric names the external processor records and exports. Metrics not listed are dropped. Format: gen_ai.client.token.usage,gen_ai.server.time_to_first_token. Default: all metrics (when empty).",
+	)
 	var logRequestHeaderAttributes *string
 	fs.Func("logRequestHeaderAttributes",
 		"Comma-separated key-value pairs for mapping HTTP request headers to access log attributes. Format: agent-session-id:session.id,x-tenant-id:tenant.id. Default: agent-session-id:session.id (when unset). Set to empty to disable.",
@@ -335,6 +342,10 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		}
 	}
 
+	if _, err := metrics.ParseEnabledMetrics(*enabledMetrics); err != nil {
+		return nil, fmt.Errorf("invalid enabled metrics: %w", err)
+	}
+
 	// Validate access log header attributes if provided.
 	if logRequestHeaderAttributes != nil && *logRequestHeaderAttributes != "" {
 		_, err := internalapi.ParseRequestHeaderAttributeMapping(*logRequestHeaderAttributes)
@@ -391,6 +402,7 @@ func parseAndValidateFlags(args []string) (*flags, error) {
 		requestHeaderAttributes:                requestHeaderAttributes,
 		spanRequestHeaderAttributes:            spanRequestHeaderAttributes,
 		metricsRequestHeaderAttributes:         metricsRequestHeaderAttributes,
+		enabledMetrics:                         *enabledMetrics,
 		logRequestHeaderAttributes:             logRequestHeaderAttributes,
 		endpointPrefixes:                       *endpointPrefixes,
 		rootPrefix:                             *rootPrefix,
@@ -517,6 +529,7 @@ func main() {
 		RequestHeaderAttributes:                parsedFlags.requestHeaderAttributes,
 		TracingRequestHeaderAttributes:         parsedFlags.spanRequestHeaderAttributes,
 		MetricsRequestHeaderAttributes:         parsedFlags.metricsRequestHeaderAttributes,
+		EnabledMetrics:                         parsedFlags.enabledMetrics,
 		LogRequestHeaderAttributes:             parsedFlags.logRequestHeaderAttributes,
 		EndpointPrefixes:                       parsedFlags.endpointPrefixes,
 		RootPrefix:                             parsedFlags.rootPrefix,

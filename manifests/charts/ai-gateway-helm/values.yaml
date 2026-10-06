@@ -111,6 +111,15 @@ controller:
   # Example: "x-tenant-id:tenant.id,x-tenant-id:tenant.id"
   metricsRequestHeaderAttributes: ""
 
+  # Comma-separated OpenTelemetry metric names the external processor records and exports.
+  # Metrics not listed are dropped in the external processor, so they cost no memory and are not scraped.
+  # Defaults to all metrics when empty.
+  # Valid names: gen_ai.client.token.usage, gen_ai.server.request.duration, gen_ai.server.time_to_first_token,
+  # gen_ai.server.time_per_output_token, mcp.request.duration, mcp.method.count, mcp.initialization.duration,
+  # mcp.capabilities.negotiated, mcp.progress.notifications
+  # Example: "gen_ai.client.token.usage,gen_ai.server.time_to_first_token"
+  enabledMetrics: ""
+
   # Comma-separated key-value pairs for mapping HTTP request headers to access log attributes.
   # Format: "header1:attribute1,header2:attribute2"
   # Defaults to "agent-session-id:session.id" when unset.

@@ -106,7 +106,7 @@ func TestNewMeterFromEnv_ConsoleExporter(t *testing.T) {
 				var stdout bytes.Buffer
 				manualReader := sdkmetric.NewManualReader()
 
-				meter, shutdown, err := NewMeterFromEnv(t.Context(), &stdout, manualReader)
+				meter, shutdown, err := NewMeterFromEnv(t.Context(), &stdout, manualReader, nil)
 				require.NoError(t, err)
 				require.NotNil(t, meter)
 				require.NotNil(t, shutdown)
@@ -176,7 +176,7 @@ func TestNewMeterFromEnv_ConsoleExporter_NoMetrics(t *testing.T) {
 		var stdout bytes.Buffer
 		manualReader := sdkmetric.NewManualReader()
 
-		meter, shutdown, err := NewMeterFromEnv(t.Context(), &stdout, manualReader)
+		meter, shutdown, err := NewMeterFromEnv(t.Context(), &stdout, manualReader, nil)
 		require.NoError(t, err)
 		require.NotNil(t, meter)
 		require.NotNil(t, shutdown)
@@ -267,7 +267,7 @@ func TestNewMeterFromEnv_NetworkExporters(t *testing.T) {
 			var stdout bytes.Buffer
 			manualReader := sdkmetric.NewManualReader()
 
-			meter, shutdown, err := NewMeterFromEnv(t.Context(), &stdout, manualReader)
+			meter, shutdown, err := NewMeterFromEnv(t.Context(), &stdout, manualReader, nil)
 			require.NoError(t, err)
 			require.NotNil(t, meter)
 			require.NotNil(t, shutdown)
@@ -355,7 +355,7 @@ func TestNewMeterFromEnv_PrometheusReader(t *testing.T) {
 			}
 
 			manualReader := sdkmetric.NewManualReader()
-			meter, shutdown, err := NewMeterFromEnv(t.Context(), io.Discard, manualReader)
+			meter, shutdown, err := NewMeterFromEnv(t.Context(), io.Discard, manualReader, nil)
 			require.NoError(t, err)
 			require.NotNil(t, meter)
 			require.NotNil(t, shutdown)
@@ -428,7 +428,7 @@ func TestNewMeterFromEnv_ErrorHandling(t *testing.T) {
 			}
 
 			manualReader := sdkmetric.NewManualReader()
-			_, _, err := NewMeterFromEnv(t.Context(), io.Discard, manualReader)
+			_, _, err := NewMeterFromEnv(t.Context(), io.Discard, manualReader, nil)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tt.expectError)
 		})
@@ -452,7 +452,7 @@ func TestNewMeterFromEnv_OTLPHeaders(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
 
 	manualReader := sdkmetric.NewManualReader()
-	meter, shutdown, err := NewMeterFromEnv(t.Context(), io.Discard, manualReader)
+	meter, shutdown, err := NewMeterFromEnv(t.Context(), io.Discard, manualReader, nil)
 	require.NoError(t, err)
 	defer func() {
 		_ = shutdown(context.Background())

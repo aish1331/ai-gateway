@@ -57,6 +57,7 @@ type extProcFlags struct {
 	requestHeaderAttributes                *string       // comma-separated key-value pairs for mapping HTTP request headers to otel attributes shared across metrics, spans, and access logs.
 	spanRequestHeaderAttributes            *string       // comma-separated key-value pairs for mapping HTTP request headers to otel span attributes.
 	metricsRequestHeaderAttributes         *string       // comma-separated key-value pairs for mapping HTTP request headers to otel metric attributes.
+	enabledMetrics                         string        // comma-separated otel metric names to record. Empty means all.
 	logRequestHeaderAttributes             *string       // comma-separated key-value pairs for mapping HTTP request headers to access log attributes.
 	mcpAddr                                string        // address for the MCP proxy server which can be either tcp or unix domain socket.
 	mcpSessionEncryptionSeed               string        // Seed for deriving the key for encrypting MCP sessions.
@@ -132,6 +133,11 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		"Comma-separated key-value pairs for mapping HTTP request headers to otel metric attributes. Format: x-tenant-id:tenant.id,x-tenant-id:tenant.id.",
 		setOptionalString(&flags.metricsRequestHeaderAttributes),
 	)
+	fs.StringVar(&flags.enabledMetrics,
+		"enabledMetrics",
+		"",
+		"Comma-separated OpenTelemetry metric names to record and export. Metrics not listed are dropped. Format: gen_ai.client.token.usage,gen_ai.server.time_to_first_token. Default: all metrics (when empty).",
+	)
 	fs.Func("logRequestHeaderAttributes",
 		"Comma-separated key-value pairs for mapping HTTP request headers to access log attributes. Format: agent-session-id:session.id,x-tenant-id:tenant.id. Default: agent-session-id:session.id (when unset). Set to empty to disable.",
 		setOptionalString(&flags.logRequestHeaderAttributes),
@@ -190,6 +196,9 @@ func parseAndValidateFlags(args []string) (extProcFlags, error) {
 		if _, err := internalapi.ParseRequestHeaderAttributeMapping(*flags.metricsRequestHeaderAttributes); err != nil {
 			errs = append(errs, fmt.Errorf("failed to parse metrics header mapping: %w", err))
 		}
+	}
+	if _, err := metrics.ParseEnabledMetrics(flags.enabledMetrics); err != nil {
+		errs = append(errs, fmt.Errorf("failed to parse enabled metrics: %w", err))
 	}
 	if flags.logRequestHeaderAttributes != nil && *flags.logRequestHeaderAttributes != "" {
 		if _, err := internalapi.ParseRequestHeaderAttributeMapping(*flags.logRequestHeaderAttributes); err != nil {
@@ -299,7 +308,11 @@ func Main(ctx context.Context, args []string, stderr io.Writer) (err error) {
 	}
 
 	// Create meter with Prometheus + optionally OTEL.
-	meter, metricsShutdown, err := metrics.NewMeterFromEnv(ctx, os.Stdout, promReader)
+	enabledMetrics, err := metrics.ParseEnabledMetrics(flags.enabledMetrics)
+	if err != nil {
+		return fmt.Errorf("failed to parse enabled metrics: %w", err)
+	}
+	meter, metricsShutdown, err := metrics.NewMeterFromEnv(ctx, os.Stdout, promReader, enabledMetrics)
 	if err != nil {
 		return fmt.Errorf("failed to create metrics: %w", err)
 	}

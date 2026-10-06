@@ -87,6 +87,8 @@ type Options struct {
 	TracingRequestHeaderAttributes *string
 	// MetricsRequestHeaderAttributes is the comma-separated key-value pairs for mapping HTTP request headers to Otel metric attributes.
 	MetricsRequestHeaderAttributes *string
+	// EnabledMetrics is the comma-separated OpenTelemetry metric names the external processor records. Empty means all.
+	EnabledMetrics string
 	// LogRequestHeaderAttributes is the comma-separated key-value pairs for mapping HTTP request headers to access log attributes.
 	LogRequestHeaderAttributes *string
 	// RootPrefix is the root prefix for all the routes handled by the AI Gateway.

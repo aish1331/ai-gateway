@@ -83,6 +83,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 		require.Equal(t, 4*1024*1024, f.maxRecvMsgSize)
 		require.Nil(t, f.spanRequestHeaderAttributes)
 		require.Nil(t, f.logRequestHeaderAttributes)
+		require.Empty(t, f.enabledMetrics)
 		require.NoError(t, err)
 	})
 	t.Run("all flags", func(t *testing.T) {
@@ -110,6 +111,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 					tc.dash + "requestHeaderAttributes=x-tenant-id:tenant.id",
 					tc.dash + "spanRequestHeaderAttributes=x-forwarded-proto:url.scheme",
 					tc.dash + "logRequestHeaderAttributes=x-forwarded-proto:url.scheme",
+					tc.dash + "enabledMetrics=gen_ai.client.token.usage,gen_ai.server.time_to_first_token",
 					tc.dash + "endpointPrefixes=openai:/v1,cohere:/cohere/v2,anthropic:/anthropic/v1",
 					tc.dash + "maxRecvMsgSize=33554432",
 					tc.dash + "watchNamespaces=default,envoy-ai-gateway-system",
@@ -138,6 +140,7 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				require.Equal(t, "x-forwarded-proto:url.scheme", *f.spanRequestHeaderAttributes)
 				require.NotNil(t, f.logRequestHeaderAttributes)
 				require.Equal(t, "x-forwarded-proto:url.scheme", *f.logRequestHeaderAttributes)
+				require.Equal(t, "gen_ai.client.token.usage,gen_ai.server.time_to_first_token", f.enabledMetrics)
 				require.Equal(t, "openai:/v1,cohere:/cohere/v2,anthropic:/anthropic/v1", f.endpointPrefixes)
 				require.Equal(t, 32*1024*1024, f.maxRecvMsgSize)
 				require.Equal(t, []string{"default", "envoy-ai-gateway-system"}, f.watchNamespaces)
@@ -201,6 +204,11 @@ func Test_parseAndValidateFlags(t *testing.T) {
 				name:   "invalid spanRequestHeaderAttributes - empty header",
 				flags:  []string{"--spanRequestHeaderAttributes=:session.id"},
 				expErr: "invalid tracing header attributes",
+			},
+			{
+				name:   "invalid enabledMetrics - unknown name",
+				flags:  []string{"--enabledMetrics=gen_ai_client_token_usage"},
+				expErr: `invalid enabled metrics: unknown metric "gen_ai_client_token_usage"`,
 			},
 			{
 				name:   "invalid endpointPrefixes - unknown key",

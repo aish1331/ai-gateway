@@ -32,10 +32,16 @@ import (
 //   - OTEL_EXPORTER_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: Enables OTLP if set.
 //
 // Prometheus is always enabled via the provided promReader; other exporters are added conditionally.
-func NewMeterFromEnv(ctx context.Context, stdout io.Writer, promReader sdkmetric.Reader) (metric.Meter, func(context.Context) error, error) {
+//
+// enabledMetrics restricts which metrics are recorded and exported (see ParseEnabledMetrics). When empty,
+// all metrics are enabled.
+func NewMeterFromEnv(ctx context.Context, stdout io.Writer, promReader sdkmetric.Reader, enabledMetrics []string) (metric.Meter, func(context.Context) error, error) {
 	// Initialize options for the MeterProvider, starting with the required Prometheus reader.
 	var options []sdkmetric.Option
 	options = append(options, sdkmetric.WithReader(promReader))
+	if len(enabledMetrics) > 0 {
+		options = append(options, sdkmetric.WithView(enabledMetricsView(enabledMetrics)))
+	}
 
 	// Add OTEL exporters only if the SDK is not disabled.
 	if os.Getenv("OTEL_SDK_DISABLED") != "true" {

@@ -56,6 +56,12 @@ You can enrich the metrics with custom labels extracted from HTTP request header
 
 :::
 
+:::tip
+
+To emit only some metrics, set `controller.enabledMetrics` to a comma-separated list of OpenTelemetry metric names, for example `gen_ai.client.token.usage,gen_ai.server.time_to_first_token`. Metrics not listed are dropped inside the external processor, so they use no memory and are absent from both the Prometheus endpoint and OTLP export. This is useful with high-cardinality header attributes, where each metric adds a series per label combination. All metrics are emitted by default.
+
+:::
+
 ## Trying it out
 
 Before you begin, you'll need to complete the basic setup from the [Basic Usage](/docs/getting-started/basic-usage) guide.

@@ -74,6 +74,9 @@ spec:
             {{- if .Values.controller.metricsRequestHeaderAttributes }}
             - --metricsRequestHeaderAttributes={{ .Values.controller.metricsRequestHeaderAttributes }}
             {{- end }}
+            {{- if .Values.controller.enabledMetrics }}
+            - --enabledMetrics={{ .Values.controller.enabledMetrics }}
+            {{- end }}
             {{- if ne .Values.controller.logRequestHeaderAttributes nil }}
             - --logRequestHeaderAttributes={{ .Values.controller.logRequestHeaderAttributes }}
             {{- end }}
